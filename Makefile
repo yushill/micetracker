@@ -12,7 +12,7 @@ DEPS=$(patsubst %.o,%.d,$(OBJS))
 
 BUILD=build
 
-EXE=$(BUILD)/exe
+EXE=micetracker
 
 .PHONY: all
 all: $(EXE)
