@@ -2,6 +2,7 @@
 #include <set>
 #include <string>
 #include <vector>
+#include <limits>
 #include <fstream>
 #include <cv.h>
 #include <highgui.h>
@@ -61,10 +62,10 @@ struct FrameIterator
 {
   CvCapture* capture;
   IplImage* frame;
-  uintptr_t idx;
+  uintptr_t idx, stop;
   
-  FrameIterator( std::string _fp )
-    : capture( cvCaptureFromAVI( _fp.c_str() ) ), frame(), idx()
+  FrameIterator( std::string _fp, uintptr_t _stop )
+    : capture( cvCaptureFromAVI( _fp.c_str() ) ), frame(), idx(), stop( _stop )
   {
     if (not capture) throw "Error when reading avi file";
   }
@@ -80,6 +81,7 @@ struct FrameIterator
   {
     frame = cvQueryFrame( capture );
     ++idx;
+    if (idx >= stop) { while (frame) { frame = cvQueryFrame( capture ); ++idx; } }
     return frame;
   }
 };
@@ -94,10 +96,11 @@ struct Analyser
   uint8_t threshold;
   double minelongation;
   uintptr_t crop[4];
+  uintptr_t stop;
   std::vector<std::string> args;
   
   Analyser()
-    : records(), ref(), threshold( 0x40 ), minelongation( 1.3 ), crop( )
+    : records(), ref(), threshold( 0x40 ), minelongation( 1.3 ), crop( ), stop( std::numeric_limits<uintptr_t>::max() )
   { for (int idx = 0; idx < 4; ++idx) crop[idx] = 0; }
   
   struct Ouch {};
@@ -357,10 +360,10 @@ struct Analyser
       crop[0], ref->width - crop[1],
       crop[2], ref->height - crop[3]
     };
-      
-    sink << "bounds:" << bounds[0] << ',' << bounds[1] << ",-" << bounds[2] << ",-" << bounds[3] << ','
+    
+    sink << "bounds_lrtb," << bounds[0] << ',' << bounds[1] << ",-" << bounds[2] << ",-" << bounds[3] << ','
          << "elongation," << minelongation << ','
-         << "threshold," << threshold << '\n';
+         << "threshold," << (unsigned)threshold << '\n';
     
     sink << "elongation,Xmid,Ymid,Xhead,Yhead,Xtail,Ytail\n";
     for (std::vector<Mice>::const_iterator itr = this->mices.begin(), end = this->mices.end(); itr != end; ++itr)
@@ -427,6 +430,11 @@ main (int argc, char** argv)
         std::cerr << "Using threshold: " << unsigned( analyser.threshold ) << "\n";
       }
       
+      else if ((param = argsof( "stop:", argv[aidx] ))) {
+        analyser.stop = strtoul( param, &param, 0 );
+        std::cerr << "Maximum frames: " << unsigned( analyser.stop ) << "\n";
+      }
+      
       else if ((param = argsof( "elongation:", argv[aidx] ))) {
         analyser.minelongation = strtod( param, &param );
         std::cerr << "Using minimum elongation: " << analyser.minelongation << "\n";
@@ -450,23 +458,25 @@ main (int argc, char** argv)
     outfilepath += ".csv";
   }
   
-  for (FrameIterator itr( filepath ); itr.next(); )
+  for (FrameIterator itr( filepath, analyser.stop ); itr.next(); )
     analyser.pass0( itr.frame );
   
   analyser.background();
   
-  for (FrameIterator itr( filepath ); itr.next(); )
+  for (FrameIterator itr( filepath, analyser.stop ); itr.next(); )
     analyser.pass1( itr.frame );
   
   analyser.trajectory();
   
   CallBackFunc( -1, analyser.width(), analyser.height(), 0, 0 );
   cv::setMouseCallback( "w", CallBackFunc, NULL );
-  for (FrameIterator itr( filepath ); itr.next(); )
+  int kwait = 0;
+  for (FrameIterator itr( filepath, analyser.stop ); itr.next(); )
     {
       analyser.redraw( itr );
       cvShowImage( "w", itr.frame );
-      cvWaitKey(0); //key press to step
+      char k = cvWaitKey(kwait);
+      if (k == '\n') kwait = 1;
     }
   
   cvDestroyWindow( "w" );
