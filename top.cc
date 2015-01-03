@@ -449,13 +449,12 @@ main (int argc, char** argv)
   if (filepath.size() == 0) { std::cerr << "no video given...\n"; return 1; }
   cvNamedWindow( "w", 1 );
   
-  std::string outfilepath( filepath );
+  std::string prefix( filepath );
   
   {
-    uintptr_t idx = outfilepath.rfind('.');
-    if (idx < outfilepath.size())
-      outfilepath = outfilepath.substr(0,idx);
-    outfilepath += ".csv";
+    uintptr_t idx = prefix.rfind('.');
+    if (idx < prefix.size())
+      prefix = prefix.substr(0,idx);
   }
   
   for (FrameIterator itr( filepath, analyser.stop ); itr.next(); )
@@ -471,17 +470,29 @@ main (int argc, char** argv)
   CallBackFunc( -1, analyser.width(), analyser.height(), 0, 0 );
   cv::setMouseCallback( "w", CallBackFunc, NULL );
   int kwait = 0;
+  CvVideoWriter* writer = 0;
+  
   for (FrameIterator itr( filepath, analyser.stop ); itr.next(); )
     {
       analyser.redraw( itr );
       cvShowImage( "w", itr.frame );
       char k = cvWaitKey(kwait);
       if (k == '\n') kwait = 1;
+      else if (k == 'r') {
+         writer = cvCreateVideoWriter( (prefix + "_rec.avi").c_str(), CV_FOURCC('M','J','P','G'), 25, cvSize( analyser.width(), analyser.height() ) );
+        kwait = 1;
+      }
+      
+      if (writer)
+        cvWriteFrame( writer, itr.frame );
     }
+  
+  if (writer)
+    cvReleaseVideoWriter( &writer );
   
   cvDestroyWindow( "w" );
   
-  std::ofstream sink( outfilepath.c_str() );
+  std::ofstream sink( (prefix + ".csv").c_str() );
   analyser.dumpresults( sink );
   
   return 0;
