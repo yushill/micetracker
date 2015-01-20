@@ -9,30 +9,6 @@
 #include <inttypes.h>
 #include <unistd.h>
 
-struct UserCrop
-{
-  int w, h; void window( int x, int y ) { w = x; h = y; };
-  int x0, y0; void mouse( int x1, int y1 )
-  {
-    int x = x1, y = y1;
-    if (this->x0 > x1) std::swap(this->x0,x1);
-    if (this->y0 > y1) std::swap(this->y0,y1);
-    x1 = w - x1;
-    y1 = h - y1;
-    std::cout << "==> crop:" << this->x0 << ':' << x1 << ':' << this->y0 << ':' << y1 << std::endl;
-    this->x0 = x; this->y0 = y;
-  }
-};
-
-void
-CallBackFunc( int event, int x, int y, int flags, void* userdata )
-{
-  static UserCrop uc;
-  
-  if (event == -1) { uc.window( x, y ); }
-  if (event == cv::EVENT_LBUTTONDOWN) { uc.mouse( x, y ); }
-}
-
 struct Mice
 {
   Point<double> p;
@@ -86,22 +62,68 @@ struct FrameIterator
   }
 };
   
+template <uintptr_t SZ>
+char*
+argsof( char const (&prefix)[SZ], char* arg )
+{
+  return strncmp( &prefix[0], arg, SZ-1 ) ? 0 : &arg[SZ-1];
+}
 
 struct Analyser
 {
-  uintptr_t records;
+  uintptr_t           records;
   std::vector<double> values;
-  IplImage* ref;
-  std::vector<Mice> mices;
-  uint8_t threshold;
-  double minelongation;
-  uintptr_t crop[4];
-  uintptr_t stop;
-  std::vector<std::string> args;
+  IplImage*           ref;
+  std::vector<Mice>   mices;
+  uint8_t             threshold;
+  double              minelongation;
+  uintptr_t           crop[4];
+  uintptr_t           stop;
+  typedef std::vector<std::string> Args;
+  Args                args;
+  Point<int>          lastclick;
+  std::string         croparg;
   
   Analyser()
-    : records(), ref(), threshold( 0x40 ), minelongation( 1.3 ), crop( ), stop( std::numeric_limits<uintptr_t>::max() )
+    : records(), ref(), threshold( 0x40 ), minelongation( 1.3 )
+    , crop( ), stop( std::numeric_limits<uintptr_t>::max() )
+    , lastclick( -1, -1 )
   { for (int idx = 0; idx < 4; ++idx) crop[idx] = 0; }
+  
+  void
+  click( int x1, int y1 )
+  {
+    int x0 = this->lastclick.x, y0 = this->lastclick.y;
+    this->lastclick.x = x1; this->lastclick.y = y1;
+    if ((x0 < 0) or (y0 < 0)) return;
+    
+    if (x0 > x1) std::swap(x0,x1);
+    if (y0 > y1) std::swap(y0,y1);
+    
+    {
+      std::ostringstream oss;
+      oss << "crop:" << x0 << ':' << (width() - x1) << ':' << y0 << ':' << (height() - y1);
+      croparg = oss.str(); 
+    }
+    
+    std::cerr << "==> " << croparg << std::endl;
+  }
+  
+  void
+  restart()
+  {
+    std::vector<char*> newargs;
+    for (Args::iterator itr = args.begin(), end = args.end(); itr != end; ++itr) {
+      newargs.push_back( &((*itr)[0]) );
+    }
+
+    if (croparg.size())
+      newargs.push_back( &croparg[0] );
+    newargs.push_back( 0 );
+    
+    execvp( newargs[0], &newargs[0] );
+    throw 0; // should not be here
+  }
   
   struct Ouch {};
   void pass0( IplImage const* img )
@@ -351,7 +373,7 @@ struct Analyser
   dumpresults( std::ostream& sink )
   {
     sink << "micetracker";
-    for (std::vector<std::string>::iterator itr = args.begin(), end = args.end();  itr != end; ++itr) {
+    for (Args::const_iterator itr = args.begin(), end = args.end(); (++itr) != end;) {
       sink << ' ' << *itr;
     }
     sink << '\n';
@@ -373,13 +395,6 @@ struct Analyser
       }
   }
 };
-
-template <uintptr_t SZ>
-char*
-argsof( char const (&prefix)[SZ], char* arg )
-{
-  return strncmp( &prefix[0], arg, SZ-1 ) ? 0 : &arg[SZ-1];
-}
 
 std::string
 stringf( char const* _fmt, ... )
@@ -403,18 +418,27 @@ stringf( char const* _fmt, ... )
   return str;
 }
 
+void
+mouse_callback( int event, int x, int y, int flags, Analyser* analyser )
+{
+  if (event == cv::EVENT_LBUTTONDOWN)
+    analyser->click( x, y );
+}
+
+
 int
-main (int argc, char** argv)
+main( int argc, char** argv )
 {
   std::string filepath;
   Analyser analyser;
+  analyser.args.push_back( argv[0] );
   
   for (int aidx = 1; aidx < argc; aidx += 1)
     {
-      analyser.args.push_back( argv[aidx]);
-        
       char* param;
+      analyser.args.push_back( argv[aidx] );
       if ((param = argsof( "crop:", argv[aidx] ))) {
+        analyser.args.pop_back();
         char const* serr = "syntax error: crop:<left>:<right>:<top>:<bottom>\n";
         char sep = ':';
         for (int idx = 0; idx < 4; ++idx) {
@@ -423,6 +447,7 @@ main (int argc, char** argv)
           sep = *param++;
         }
         if (sep != '\0') { std::cerr << serr; return 1; }
+        analyser.croparg = argv[aidx];
       }
       
       else if ((param = argsof( "threshold:", argv[aidx] ))) {
@@ -467,8 +492,7 @@ main (int argc, char** argv)
   
   analyser.trajectory();
   
-  CallBackFunc( -1, analyser.width(), analyser.height(), 0, 0 );
-  cv::setMouseCallback( "w", CallBackFunc, NULL );
+  cv::setMouseCallback( "w", (cv::MouseCallback)mouse_callback, &analyser );
   int kwait = 0;
   CvVideoWriter* writer = 0;
   
@@ -477,10 +501,16 @@ main (int argc, char** argv)
       analyser.redraw( itr );
       cvShowImage( "w", itr.frame );
       char k = cvWaitKey(kwait);
-      if (k == '\n') kwait = 1;
-      else if (k == 'r') {
-         writer = cvCreateVideoWriter( (prefix + "_rec.avi").c_str(), CV_FOURCC('M','J','P','G'), 25, cvSize( analyser.width(), analyser.height() ) );
+      if (k == '\n')
         kwait = 1;
+      else if (k == 'r') {
+        writer = cvCreateVideoWriter( (prefix + "_rec.avi").c_str(), CV_FOURCC('M','J','P','G'), 25, cvSize( analyser.width(), analyser.height() ) );
+        kwait = 1;
+      }
+      else if (k == '\b')
+        analyser.restart();
+      else if (kwait == 0) {
+        std::cerr << "KeyCode: " << int(k) << "\n";
       }
       
       if (writer)
@@ -497,6 +527,3 @@ main (int argc, char** argv)
   
   return 0;
 }
-
-
-
