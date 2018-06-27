@@ -83,11 +83,13 @@ struct Analyser
   Args                args;
   Point<int>          lastclick;
   std::string         croparg;
+  bool                hilite;
+  unsigned            bgframes;
   
   Analyser()
     : records(), ref(), threshold( 0x40 ), minelongation( 1.3 )
     , crop( ), stop( std::numeric_limits<uintptr_t>::max() )
-    , lastclick( -1, -1 )
+    , lastclick( -1, -1 ), hilite(false), bgframes(0)
   { for (int idx = 0; idx < 4; ++idx) crop[idx] = 0; }
   
   void
@@ -138,6 +140,9 @@ struct Analyser
     if ((values.size() != compcount) or (ref == 0)) throw Ouch();
     uintptr_t const step = img->widthStep;
     
+    if ((records >= bgframes) and (bgframes > 0))
+      return;
+    
     for (uintptr_t y = 0; y < height; ++y)
       for (uintptr_t x = 0; x < width; ++x)
         for (uintptr_t c = 0; c < channels; ++c)
@@ -146,6 +151,7 @@ struct Analyser
             uintptr_t bgdidx = (y*width + x)*channels + c;
             values[bgdidx] += (double)(uint32_t)(*((uint8_t*)&(img->imageData[imgidx])));
           }
+    
     records += 1;
   }
   
@@ -234,8 +240,10 @@ struct Analyser
         for (uintptr_t c = 0; c < channels; ++c)
           bgr[c] = abs( (int)ipix[c] - (int)bpix[c] );
         uint8_t l = (0x4c8b43*bgr[2] + 0x9645a2*bgr[1] + 0x1d2f1b*bgr[0] + 0x800000) >> 24;
-        if (l < threshold) { /* ipix[0] = 0x00;   ipix[1] = 0x00;   ipix[2] = 0x00; */ continue; }
-        else               { /* ipix[0] = bgr[0]; ipix[1] = bgr[1]; ipix[2] = bgr[2]; */ }
+        if (hilite and (l >= threshold))
+          { ipix[0] ^= 0xff; ipix[1] ^= 0x00; ipix[2] ^= 0xff; continue; }
+        // if () { /* ipix[0] = 0x00;   ipix[1] = 0x00;   ipix[2] = 0x00; */ continue; }
+        // else               { /* ipix[0] = bgr[0]; ipix[1] = bgr[1]; ipix[2] = bgr[2]; */ }
         //ipix[0] = 0xff; ipix[1] = 0xff; ipix[2] = 0xff;
       }
     }
@@ -338,8 +346,8 @@ struct Analyser
     { // lining up by segment
       double score = 0;
       
-      for (std::vector<Mice>::iterator head = mices.begin(), end = mices.end(), tail = end; head <= end; ++head) {
-        if      ((head < end) and head->valid) {
+      for (std::vector<Mice>::iterator head = mices.begin(), end = mices.end(), tail = end; head != end; ++head) {
+        if      ((head != end) and head->valid) {
           if (tail == end) tail = head;
           score += head->s * head->d;
         }
@@ -450,6 +458,16 @@ main( int argc, char** argv )
         analyser.croparg = argv[aidx];
       }
       
+      else if ((param = argsof( "hilite:", argv[aidx] )))
+        {
+          analyser.hilite = true;
+        }
+      
+      else if ((param = argsof( "bgframes:", argv[aidx] ))) {
+        analyser.bgframes = strtoul( param, &param, 0 );
+        std::cerr << "Using bgframes: " << unsigned( analyser.bgframes ) << "\n";
+      }
+      
       else if ((param = argsof( "threshold:", argv[aidx] ))) {
         analyser.threshold = strtoul( param, &param, 0 );
         std::cerr << "Using threshold: " << unsigned( analyser.threshold ) << "\n";
@@ -482,13 +500,25 @@ main( int argc, char** argv )
       prefix = prefix.substr(0,idx);
   }
   
+  std::cerr << "Pass #0\n";
   for (FrameIterator itr( filepath, analyser.stop ); itr.next(); )
-    analyser.pass0( itr.frame );
-  
+    {
+      std::cerr << "\e[G\e[KFrame: " << itr.idx << " ";
+      std::cerr.flush();
+      analyser.pass0( itr.frame );
+    }
+  std::cerr << std::endl;
+
   analyser.background();
   
+  std::cerr << "Pass #1\n";
   for (FrameIterator itr( filepath, analyser.stop ); itr.next(); )
-    analyser.pass1( itr.frame );
+    {
+      std::cerr << "\e[G\e[KFrame: " << itr.idx << " ";
+      std::cerr.flush();
+      analyser.pass1( itr.frame );
+    }
+  std::cerr << std::endl;
   
   analyser.trajectory();
   
