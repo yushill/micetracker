@@ -69,6 +69,13 @@ argsof( char const (&prefix)[SZ], char* arg )
   return strncmp( &prefix[0], arg, SZ-1 ) ? 0 : &arg[SZ-1];
 }
 
+struct BGSel
+{
+  virtual bool accept( uintptr_t frame ) = 0;
+  virtual void repr( std::ostream& ) = 0;
+  virtual ~BGSel() {}
+};
+
 struct Analyser
 {
   uintptr_t           records;
@@ -84,11 +91,11 @@ struct Analyser
   Point<int>          lastclick;
   std::string         croparg;
   bool                hilite;
-  unsigned            bgframes;
+  BGSel*              bgframes;
   
   Analyser()
     : records(), ref(), threshold( 0x40 ), minelongation( 1.3 )
-    , crop( ), stop( std::numeric_limits<uintptr_t>::max() )
+    , crop(), stop( std::numeric_limits<uintptr_t>::max() )
     , lastclick( -1, -1 ), hilite(false), bgframes(0)
   { for (int idx = 0; idx < 4; ++idx) crop[idx] = 0; }
   
@@ -128,8 +135,9 @@ struct Analyser
   }
   
   struct Ouch {};
-  void pass0( IplImage const* img )
+  void pass0( FrameIterator const& fi )
   {
+    IplImage const* img = fi.frame;
     if ((img->depth != 8) or (img->origin != 0) or (img->dataOrder != 0)) throw Ouch();
     // for (int idx = 0; idx < 3; ++idx) if (img->colorModel[idx] == "RGB"[3]) throw Ouch();
     // for (int idx = 0; idx < 3; ++idx) if (img->channelSeq[idx] == "RGB"[3]) throw Ouch();
@@ -139,8 +147,8 @@ struct Analyser
     if (values.size() == 0) { values.resize( compcount ); assert( not ref ); ref = cvCloneImage( img ); }
     if ((values.size() != compcount) or (ref == 0)) throw Ouch();
     uintptr_t const step = img->widthStep;
-    
-    if ((records >= bgframes) and (bgframes > 0))
+
+    if (not bgframes->accept( fi.idx ))
       return;
     
     for (uintptr_t y = 0; y < height; ++y)
@@ -433,6 +441,26 @@ mouse_callback( int event, int x, int y, int flags, Analyser* analyser )
     analyser->click( x, y );
 }
 
+struct RangeBGSel : public BGSel
+{
+  RangeBGSel( uintptr_t _lower, uintptr_t _upper ) : lower(_lower), upper(_upper) {}
+  virtual bool accept( uintptr_t frame ) { return (frame >= lower and frame < upper); }
+  virtual void repr( std::ostream& sink ) { sink << "Range( " << lower << ", " << upper << " )"; };
+  
+  uintptr_t lower;
+  uintptr_t upper;
+};
+
+struct RatioBGSel : public BGSel
+{
+  RatioBGSel( uintptr_t _first, uintptr_t _second ) : first(_first), period(_first+_second) {}
+  virtual bool accept( uintptr_t frame ) { return (frame % period) < first; }
+  virtual void repr( std::ostream& sink ) { sink << "Ratio( " << first << ", " << (period-first) << " )"; };
+  
+  uintptr_t first;
+  uintptr_t period;
+};
+
 
 int
 main( int argc, char** argv )
@@ -463,10 +491,31 @@ main( int argc, char** argv )
           analyser.hilite = true;
         }
       
-      else if ((param = argsof( "bgframes:", argv[aidx] ))) {
-        analyser.bgframes = strtoul( param, &param, 0 );
-        std::cerr << "Using bgframes: " << unsigned( analyser.bgframes ) << "\n";
-      }
+      else if ((param = argsof( "bgframes:", argv[aidx] )))
+	{
+	  delete analyser.bgframes;
+	  uintptr_t first = strtoull( param, &param, 0 );
+	  char mode = *param;
+	  if (mode)
+	    {
+	      uintptr_t second = strtoull( param+1, &param, 0 );
+	      switch (mode)
+		{
+		case '-': analyser.bgframes = new RangeBGSel(first, second); break;
+		case ':': analyser.bgframes = new RatioBGSel(first, second); break;
+		default:
+		  std::cerr << "unexpected char: " << mode << " in bgframes switch.";
+		  return 1;
+		}
+	    }
+	  else
+	    {
+	      analyser.bgframes = new RangeBGSel(0, first);
+	    }
+	  std::cerr << "Using bgframes: ";
+	  analyser.bgframes->repr( std::cerr );
+	  std::cerr << "\n";
+	}
       
       else if ((param = argsof( "threshold:", argv[aidx] ))) {
         analyser.threshold = strtoul( param, &param, 0 );
@@ -505,7 +554,7 @@ main( int argc, char** argv )
     {
       std::cerr << "\e[G\e[KFrame: " << itr.idx << " ";
       std::cerr.flush();
-      analyser.pass0( itr.frame );
+      analyser.pass0( itr );
     }
   std::cerr << std::endl;
 
