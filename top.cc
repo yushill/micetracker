@@ -1,10 +1,14 @@
 #include <geometry.hh>
+#include <fstream>
+#include <iostream>
 #include <set>
 #include <string>
 #include <vector>
 #include <limits>
-#include <fstream>
+#include <cmath>
+#include <cstdarg>
 #include <cv.h>
+#include <opencv2/highgui.hpp>
 #include <highgui.h>
 #include <inttypes.h>
 #include <unistd.h>
@@ -24,7 +28,7 @@ struct Mice
   double distance() const { return sqrt( (ep1() - ep0()).sqnorm() ); }
   
   void invalidate() { p.x = p.y = d.x = d.y = mjr = mnr = nan(""); valid = false; }
-  double hasnan() const { return isnan(p.x) or isnan(p.y) or isnan(d.x) or isnan(d.y) or isnan(mjr) or isnan(mnr); }
+  double hasnan() const { return std::isnan(p.x) or std::isnan(p.y) or std::isnan(d.x) or std::isnan(d.y) or std::isnan(mjr) or std::isnan(mnr); }
   
   Point<double> ep0() const { return p + d*mjr; }
   Point<double> ep1() const { return p - d*mjr; }

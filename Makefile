@@ -1,4 +1,4 @@
-CXX=g++
+CXX?=g++
 
 CPPFLAGS=-I.
 CXXFLAGS=-g3 -Wall -O3 $(shell pkg-config opencv --cflags)
