@@ -7,9 +7,7 @@
 #include <limits>
 #include <cmath>
 #include <cstdarg>
-#include <cv.h>
 #include <opencv2/highgui.hpp>
-#include <highgui.h>
 #include <inttypes.h>
 #include <unistd.h>
 
@@ -86,7 +84,6 @@ struct Analyser
   std::vector<double> values;
   IplImage*           ref;
   std::vector<Mice>   mices;
-  uint8_t             threshold;
   double              minelongation;
   uintptr_t           crop[4];
   uintptr_t           stop;
@@ -94,13 +91,15 @@ struct Analyser
   Args                args;
   Point<int>          lastclick;
   std::string         croparg;
-  bool                hilite;
   BGSel*              bgframes;
+  uint8_t             fps;
+  uint8_t             threshold;
+  bool                hilite;
   
   Analyser()
-    : records(), ref(), threshold( 0x40 ), minelongation( 1.3 )
+    : records(), ref(), minelongation( 1.3 )
     , crop(), stop( std::numeric_limits<uintptr_t>::max() )
-    , lastclick( -1, -1 ), hilite(false), bgframes(0)
+    , lastclick( -1, -1 ), bgframes(0), fps(1), threshold( 0x40 ), hilite(false)
   { for (int idx = 0; idx < 4; ++idx) crop[idx] = 0; }
   
   void
@@ -489,6 +488,12 @@ main( int argc, char** argv )
         if (sep != '\0') { std::cerr << serr; return 1; }
         analyser.croparg = argv[aidx];
       }
+
+      else if ((param = argsof( "fps:",argv[aidx] )))
+        {
+          analyser.fps = strtoul( param, &param, 0 );
+          std::cerr << "Using FPS: " << unsigned(analyser.fps) << "\n";
+        }
       
       else if ((param = argsof( "hilite:", argv[aidx] )))
         {
@@ -585,10 +590,10 @@ main( int argc, char** argv )
       cvShowImage( "w", itr.frame );
       char k = cvWaitKey(kwait);
       if (k == '\n')
-        kwait = 1;
+        kwait = analyser.fps;
       else if (k == 'r') {
         writer = cvCreateVideoWriter( (prefix + "_rec.avi").c_str(), CV_FOURCC('M','J','P','G'), 25, cvSize( analyser.width(), analyser.height() ) );
-        kwait = 1;
+        kwait = analyser.fps;
       }
       else if (k == '\b')
         analyser.restart();
