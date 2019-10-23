@@ -7,6 +7,7 @@
 #include <limits>
 #include <cmath>
 #include <cstdarg>
+#include <opencv2/opencv.hpp>
 #include <opencv2/highgui.hpp>
 #include <inttypes.h>
 #include <unistd.h>
@@ -38,29 +39,26 @@ struct Mice
 
 struct FrameIterator
 {
-  CvCapture* capture;
-  IplImage* frame;
+  cv::VideoCapture capture;
+  cv::Mat frame;
   uintptr_t idx, stop;
   
   FrameIterator( std::string _fp, uintptr_t _stop )
-    : capture( cvCaptureFromAVI( _fp.c_str() ) ), frame(), idx(), stop( _stop )
+    : capture( _fp.c_str() ), frame(), idx(), stop( _stop )
   {
-    if (not capture) throw "Error when reading avi file";
+    if (not capture.isOpened()) throw "Error when reading avi file";
   }
   
   ~FrameIterator()
-  {
-    cvReleaseCapture( &capture ); 
-    cvReleaseImage( &frame );
-  }
+  {}
   
   bool
   next()
   {
-    frame = cvQueryFrame( capture );
+    capture >> frame;
     ++idx;
-    if (idx >= stop) { while (frame) { frame = cvQueryFrame( capture ); ++idx; } }
-    return frame;
+    if (idx >= stop) { /* drain the movie */ while (not frame.empty()) { capture >> frame; ++idx; } }
+    return not frame.empty();
   }
 };
   
@@ -82,7 +80,7 @@ struct Analyser
 {
   uintptr_t           records;
   std::vector<double> values;
-  IplImage*           ref;
+  cv::Mat             ref;
   std::vector<Mice>   mices;
   double              minelongation;
   uintptr_t           crop[4];
@@ -140,71 +138,81 @@ struct Analyser
   struct Ouch {};
   void pass0( FrameIterator const& fi )
   {
-    IplImage const* img = fi.frame;
-    if ((img->depth != 8) or (img->origin != 0) or (img->dataOrder != 0)) throw Ouch();
+    cv::Mat const& img = fi.frame;
+    if (img.depth() != CV_8U) throw Ouch();
     // for (int idx = 0; idx < 3; ++idx) if (img->colorModel[idx] == "RGB"[3]) throw Ouch();
     // for (int idx = 0; idx < 3; ++idx) if (img->channelSeq[idx] == "RGB"[3]) throw Ouch();
     
-    uintptr_t height = img->height, width = img->width, channels = img->nChannels,
-      compcount = width * height * channels;
-    if (values.size() == 0) { values.resize( compcount ); assert( not ref ); ref = cvCloneImage( img ); }
-    if ((values.size() != compcount) or (ref == 0)) throw Ouch();
-    uintptr_t const step = img->widthStep;
+    uintptr_t height = img.rows, width = img.cols, channels = img.channels(), compcount = width * height * channels;
+    if (values.size() == 0)
+      {
+        values.resize( compcount );
+        ref = img.clone();
+      }
+    if ((values.size() != compcount) or ref.empty()) throw Ouch();
+    uintptr_t const step = img.step;
 
     if (not bgframes->accept( fi.idx ))
       return;
     
     for (uintptr_t y = 0; y < height; ++y)
-      for (uintptr_t x = 0; x < width; ++x)
-        for (uintptr_t c = 0; c < channels; ++c)
-          {
-            uintptr_t imgidx = y*step + x*channels + c;
-            uintptr_t bgdidx = (y*width + x)*channels + c;
-            values[bgdidx] += (double)(uint32_t)(*((uint8_t*)&(img->imageData[imgidx])));
-          }
+      {
+        uint8_t const* row = img.ptr<uint8_t>(y);
+        for (uintptr_t x = 0; x < width; ++x)
+          for (uintptr_t c = 0; c < channels; ++c)
+            {
+              uintptr_t imgidx = x*channels + c;
+              uintptr_t bgdidx = (y*width + x)*channels + c;
+              values[bgdidx] += (double)(unsigned)(row[imgidx]);
+            }
+      }
     
     records += 1;
   }
   
-  uintptr_t height() const { return ref ? ref->height : 0; }
-  uintptr_t width() const { return ref ? ref->width : 0; }
+  uintptr_t height() const { return ref.empty() ? 0 : ref.rows; }
+  uintptr_t width() const { return ref.empty() ? 0 : ref.cols; }
   
   void background()
   {
-    uintptr_t height = ref->height, width = ref->width, channels = ref->nChannels;
-    uintptr_t const step = ref->widthStep;
+    uintptr_t height = ref.rows, width = ref.cols, channels = ref.channels();
     
     for (uintptr_t y = 0; y < height; ++y)
-      for (uintptr_t x = 0; x < width; ++x)
-        for (uintptr_t c = 0; c < channels; ++c)
-          {
-            uintptr_t imgidx = y*step + x*channels + c;
-            uintptr_t bgdidx = (y*width + x)*channels + c;
-            ref->imageData[imgidx] = uint8_t(int((values[bgdidx] / records) + .5));
-          }
+      {
+        uint8_t* row = ref.ptr<uint8_t>(y);
+        for (uintptr_t x = 0; x < width; ++x)
+          for (uintptr_t c = 0; c < channels; ++c)
+            {
+              uintptr_t imgidx = x*channels + c;
+              uintptr_t bgdidx = (y*width + x)*channels + c;
+              row[imgidx] = uint8_t(int((values[bgdidx] / records) + .5));
+            }
+      }
     
   }
   
-  void pass1( IplImage const* img )
+  void pass1( cv::Mat const& img )
   {
-    if ((img->depth != 8) or (img->origin != 0) or (img->dataOrder != 0)) throw Ouch();
-    if ((ref->height != img->height) or (ref->width != img->width) or
-        (ref->nChannels != img->nChannels) or (ref->widthStep != img->widthStep)) throw Ouch();
+    if (img.depth() != CV_8U) throw Ouch();
+    if ((ref.rows != img.rows) or (ref.cols != img.cols) or
+        (ref.channels() != img.channels()) or (ref.step != img.step)) throw Ouch();
     // for (int idx = 0; idx < 3; ++idx) if (img->colorModel[idx] == "RGB"[3]) throw Ouch();
     // for (int idx = 0; idx < 3; ++idx) if (img->channelSeq[idx] == "RGB"[3]) throw Ouch();
     
-    uintptr_t height = img->height, width = img->width, channels = img->nChannels;
+    uintptr_t height = img.rows, width = img.cols, channels = img.channels();
     
-    uintptr_t const step = img->widthStep;
+    uintptr_t const step = img.step;
     Point<double> center(0.,0.);
     double xxv = 0.0, yyv = 0.0, xyv = 0.0, sum = 0.0;
     for (uintptr_t y = 0, ry = height; y < height; ++y, --ry) {
       if ((y < crop[2]) or (ry <= crop[3])) continue;
+      uint8_t const* irow = img.ptr<uint8_t>(y);
+      uint8_t* brow = ref.ptr<uint8_t>(y);
       for (uintptr_t x = 0, rx = width; x < width; ++x, --rx) {
-        uintptr_t imgidx = y*step + x*channels;
-        uint8_t* ipix = (uint8_t*)&(img->imageData[imgidx]);
+        uintptr_t imgidx = x*channels;
+        uint8_t const* ipix = &irow[imgidx];
         if ((x < crop[0]) or (rx <= crop[1])) continue;
-        uint8_t* bpix = (uint8_t*)&(ref->imageData[imgidx]);
+        uint8_t* bpix = &brow[imgidx];
         uint8_t bgr[3] = {0};
         for (uintptr_t c = 0; c < channels; ++c)
           bgr[c] = abs( (int)ipix[c] - (int)bpix[c] );
@@ -227,26 +235,28 @@ struct Analyser
     mices.push_back( Mice( center, direction, mjr, mnr ) );
   }
   
-  void redraw( FrameIterator const& _fi )
+  void redraw( FrameIterator& _fi )
   {
-    IplImage const* img = _fi.frame;
-    if ((img->depth != 8) or (img->origin != 0) or (img->dataOrder != 0)) throw Ouch();
-    if ((ref->height != img->height) or (ref->width != img->width) or
-        (ref->nChannels != img->nChannels) or (ref->widthStep != img->widthStep)) throw Ouch();
+    cv::Mat& img = _fi.frame;
+    if (img.depth() != CV_8U) throw Ouch();
+    if ((ref.rows != img.rows) or (ref.cols != img.cols) or
+        (ref.channels() != img.channels()) or (ref.step != img.step)) throw Ouch();
     // for (int idx = 0; idx < 3; ++idx) if (img->colorModel[idx] == "RGB"[3]) throw Ouch();
     // for (int idx = 0; idx < 3; ++idx) if (img->channelSeq[idx] == "RGB"[3]) throw Ouch();
     
-    uintptr_t height = img->height, width = img->width, channels = img->nChannels;
+    uintptr_t height = img.rows, width = img.cols, channels = img.channels();
     
-    uintptr_t const step = img->widthStep;
+    uintptr_t const step = img.step;
     for (uintptr_t y = 0, ry = height; y < height; ++y, --ry) {
       bool docrop = (y < crop[2]) or (ry <= crop[3]);
+      uint8_t* irow = img.ptr<uint8_t>(y);
+      uint8_t* brow = ref.ptr<uint8_t>(y);
       for (uintptr_t x = 0, rx = width; x < width; ++x, --rx) {
-        uintptr_t imgidx = y*step + x*channels;
-        uint8_t* ipix = (uint8_t*)&(img->imageData[imgidx]);
+        uintptr_t imgidx = x*channels;
+        uint8_t* ipix = &irow[imgidx];
         if (docrop or (x < crop[0]) or (rx <= crop[1]))
           { ipix[0] ^= 0xff; ipix[1] ^= 0xff; ipix[2] ^= 0xff; continue; }
-        uint8_t* bpix = (uint8_t*)&(ref->imageData[imgidx]);
+        uint8_t* bpix = &brow[imgidx];
         uint8_t bgr[3] = {0};
         for (uintptr_t c = 0; c < channels; ++c)
           bgr[c] = abs( (int)ipix[c] - (int)bpix[c] );
@@ -268,13 +278,14 @@ struct Analyser
       ybeg = std::max<intptr_t>( mice.p.y - radius, 0 ), yend = std::min<intptr_t>( mice.p.y + radius, height ),
       xbeg = std::max<intptr_t>( mice.p.x - radius, 0 ), xend = std::min<intptr_t>( mice.p.x + radius, width );
     for (intptr_t y = ybeg; y < yend; ++y) {
+      uint8_t* irow = img.ptr<uint8_t>(y);
       for (intptr_t x = xbeg; x < xend; ++x) {
         Point<double> p = Point<double>( x, y ) - mice.p;
         double mjp = p*mice.mj(), mnp = p*((!mice.d) / std::max( 4., mice.mnr ));
         uint8_t green = mjp > 0 ? 0xff : 0;
-        uintptr_t imgidx = y*step + x*channels;
         if ((mjp*mjp + mnp*mnp) < 1) {
-          uint8_t* pix = (uint8_t*)&(img->imageData[imgidx]); pix[0] = blue; pix[1] = green; pix[2] = red;
+          uint8_t* pix = &irow[x*channels];
+          pix[0] = blue; pix[1] = green; pix[2] = red;
         }
       }
     }
@@ -398,8 +409,8 @@ struct Analyser
     sink << '\n';
     
     uintptr_t bounds[4] = {
-      crop[0], ref->width - crop[1],
-      crop[2], ref->height - crop[3]
+      crop[0], ref.cols - crop[1],
+      crop[2], ref.rows - crop[3]
     };
     
     sink << "bounds_lrtb," << bounds[0] << ',' << bounds[1] << ",-" << bounds[2] << ",-" << bounds[3] << ','
@@ -582,17 +593,17 @@ main( int argc, char** argv )
   
   cv::setMouseCallback( "w", (cv::MouseCallback)mouse_callback, &analyser );
   int kwait = 0;
-  CvVideoWriter* writer = 0;
+  cv::VideoWriter writer;
   
   for (FrameIterator itr( filepath, analyser.stop ); itr.next(); )
     {
       analyser.redraw( itr );
-      cvShowImage( "w", itr.frame );
+      imshow( "w", itr.frame );
       char k = cvWaitKey(kwait);
       if (k == '\n')
         kwait = analyser.fps;
       else if (k == 'r') {
-        writer = cvCreateVideoWriter( (prefix + "_rec.avi").c_str(), CV_FOURCC('M','J','P','G'), 25, cvSize( analyser.width(), analyser.height() ) );
+        writer.open( (prefix + "_rec.avi").c_str(), CV_FOURCC('M','J','P','G'), 25, cv::Size( analyser.width(), analyser.height() ) );
         kwait = analyser.fps;
       }
       else if (k == '\b')
@@ -601,12 +612,12 @@ main( int argc, char** argv )
         std::cerr << "KeyCode: " << int(k) << "\n";
       }
       
-      if (writer)
-        cvWriteFrame( writer, itr.frame );
+      if (writer.isOpened())
+        writer << itr.frame;
     }
   
-  if (writer)
-    cvReleaseVideoWriter( &writer );
+  if (writer.isOpened())
+    writer.release();
   
   cvDestroyWindow( "w" );
   
