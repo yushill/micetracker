@@ -9,12 +9,11 @@
 
 struct FrameIterator
 {
-  cv::VideoCapture capture;
   cv::Mat frame;
   uintptr_t idx, stop;
   
   FrameIterator( std::string _fp, uintptr_t _stop )
-    : capture( _fp.c_str() ), frame(), idx(), stop( _stop )
+    : frame(), idx(), stop( _stop ), capture( _fp.c_str() )
   {
     if (not capture.isOpened()) throw "Error when reading avi file";
   }
@@ -30,6 +29,10 @@ struct FrameIterator
     if (idx >= stop) { /* drain the movie */ while (not frame.empty()) { capture >> frame; ++idx; } }
     return not frame.empty();
   }
+
+  
+private:
+  cv::VideoCapture capture;
 };
   
 struct Mice

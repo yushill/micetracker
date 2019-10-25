@@ -114,10 +114,10 @@ struct Params
       return *this;
     }
     Param& operator >> ( double& value ) { value = strtod(args,const_cast<char**>(&args)); return *this; }
-    std::ostream& usage(std::ostream& sink, uintptr_t spacing)
+    std::ostream& usage(std::ostream& sink, uintptr_t spacing) const
     {
       std::ostringstream buf;
-      buf << name << ':' << args_help;
+      buf << name << ':' << args_help << ' ';
       std::string && head = buf.str();
       head.insert(head.end(), (spacing > head.size() ? spacing - head.size() : 0), ' ');
       sink << head << desc_help << std::endl;
@@ -126,7 +126,7 @@ struct Params
   };
   
   struct Ouch {};
-  void all()
+  bool all()
   {
     for (Param _("crop", "<left>:<right>:<top>:<bottom>", "Narrows studied region by given margins."); match(_);)
       {
@@ -137,19 +137,19 @@ struct Params
           _ >> cfg().crop[idx] >> sep;
         }
         if (sep != '\0') throw _;
-        return;
+        return true;
       }
 
     for (Param _("fps", "<fps value>", "Frame per second in continuous video reading."); match(_);)
       {
         _ >> cfg().fps;
-        return;
+        return true;
       }
       
     for (Param _("hilite", "<is_hilite>", "Hilite mice location."); match(_);)
       {
         _ >> cfg().hilite;
-        return;
+        return true;
       }
 
     for (Param _("bgframes", "<arg1>[[-/]<arg2>]", "Frames considered for background computation; either: a count from start, a range ('-') or a ratio ('/')"); match(_);)
@@ -171,26 +171,28 @@ struct Params
           {
             cfg().bgframes = new RangeBGSel(0, first);
           }
-        return;
+        return true;
       }
       
     for (Param _("threshold", "<value>", "Threshold value for detection."); match(_);)
       {
         _ >> cfg().threshold;
-        return;
+        return true;
       }
       
     for (Param _("stop", "<bound>", "Maximum frames considered."); match(_);)
       {
         _ >> cfg().stop;
-        return;
+        return true;
       }
     
     for (Param _("elongation", "<ratio>", "Minimum mice body elongation considered for orientation"); match(_);)
       {
         _ >> cfg().minelongation;
-        return;
+        return true;
       }
+    
+    return false;
   }
   virtual bool match(Param& _) = 0;
   virtual Analyser& cfg() { throw 0; return *(Analyser*)0;  }
@@ -205,7 +207,7 @@ void help(char const* appname, std::ostream& sink)
     virtual bool match( Param& param ) override { int l = strlen(param.name) + strlen(param.args_help); if (s < l) s = l; return false; }
   } gs(spacing);
 
-  sink << "Usage: " << appname << " [<param1>:<config1> <paramN>:<configN>] <movie>\n\nParameters:\n";
+  sink << "Usage: " << appname << " [<param1>:<config1> <paramN>:<configN>] <video>\n\nParameters:\n";
   struct PrintParams : public Params
   {
     PrintParams(std::ostream& _sink, int _spc) : sink(_sink), spc(_spc) { all(); } std::ostream& sink; int spc;
@@ -218,120 +220,72 @@ main( int argc, char** argv )
 {
   Analyser analyser;
   analyser.args.push_back( argv[0] );
-  
-  struct GetParams : Params
-  {
-    GetParams( int argc, char** argv, Analyser& _analyser )
-      : self(argv[0]), args(argv), analyser(_analyser), verbose(true)
-    {
-      assert( argv[argc] == 0 );
-      while (char const* ap = *++args)
-        {
-          for (char const* h; (((h = argsof("help",ap)) and not *h) or ((h = argsof("--help",ap)) and not *h) or ((h = argsof("-h",ap)) and not *h));)
-            {
-              help(self, std::cout);
-              exit(0);
-            }
-          all();
-        }
-    }
-    virtual Analyser& cfg() override { return analyser; }
-    virtual bool match( Param& param ) override
-    {
-      char const* a = *args;
-      for (char const *b = param.name; *b; ++a, ++b)
-        { if (*a != *b) return false; }
-      if (*a++ != ':') return false;
-      param.set_args(a);
-      if (verbose)
-        { std::cerr << "[" << param.name << "] " << param.desc_help << "\n  " << a << " (" << param.args_help << ")\n"; }
-      return true;
-    }
-    char const* self; char** args;
-    Analyser& analyser;
-    bool verbose;
-  } gp(argc, argv, analyser);
-  
-  //  help( argv[0], std::cout );
-  return 0;
+
   std::string filepath;
   
-  for (int aidx = 1; aidx < argc; aidx += 1)
+  try
     {
-      char* param;
-      analyser.args.push_back( argv[aidx] );
-      if ((param = argsof( "crop:", argv[aidx] ))) {
-        analyser.args.pop_back();
-        char const* serr = "syntax error: crop:<left>:<right>:<top>:<bottom>\n";
-        char sep = ':';
-        for (int idx = 0; idx < 4; ++idx) {
-          if (sep != ':') { std::cerr << serr; return 1; }
-          analyser.crop[idx] = strtoul( param, &param, 10 );
-          sep = *param++;
-        }
-        if (sep != '\0') { std::cerr << serr; return 1; }
-        analyser.croparg = argv[aidx];
-      }
+      struct GetParams : Params
+      {
+        GetParams( int argc, char** argv, Analyser& _analyser )
+          : filepath(), self(argv[0]), args(argv), analyser(_analyser), verbose(true)
+        {
+          assert( argv[argc] == 0 );
+          while (char const* ap = *++args)
+            {
+              for (char const* h; (((h = argsof("help",ap)) and not *h) or ((h = argsof("--help",ap)) and not *h) or ((h = argsof("-h",ap)) and not *h));)
+                {
+                  help(self, std::cout);
+                  exit(0);
+                }
+              analyser.args.push_back( ap );
 
-      else if ((param = argsof( "fps:",argv[aidx] )))
-        {
-          analyser.fps = strtoul( param, &param, 0 );
-          std::cerr << "Using FPS: " << unsigned(analyser.fps) << "\n";
+              bool is_param = all();
+              if (not is_param)
+                {
+                  if (filepath.size())
+                    { throw Param("error", " one video at a time please...", ""); }
+                  filepath = ap;
+                }
+            }
+          if (not filepath.size())
+            { throw Param("error", " no video given...", ""); }
         }
-      
-      else if ((param = argsof( "hilite:", argv[aidx] )))
+        virtual Analyser& cfg() override { return analyser; }
+        virtual bool match( Param& param ) override
         {
-          analyser.hilite = true;
+          char const* a = *args;
+          for (char const *b = param.name; *b; ++a, ++b)
+            { if (*a != *b) return false; }
+          if (*a++ != ':') return false;
+          param.set_args(a);
+          if (verbose)
+            { std::cerr << "[" << param.name << "] " << param.desc_help << "\n  " << a << " (" << param.args_help << ")\n"; }
+          return true;
         }
-      
-      else if ((param = argsof( "bgframes:", argv[aidx] )))
-	{
-	  delete analyser.bgframes;
-	  uintptr_t first = strtoull( param, &param, 0 );
-	  char mode = *param;
-	  if (mode)
-	    {
-	      uintptr_t second = strtoull( param+1, &param, 0 );
-	      switch (mode)
-		{
-		case '-': analyser.bgframes = new RangeBGSel(first, second); break;
-		case ':': analyser.bgframes = new RatioBGSel(first, second); break;
-		default:
-		  std::cerr << "unexpected char: " << mode << " in bgframes switch.";
-		  return 1;
-		}
-	    }
-	  else
-	    {
-	      analyser.bgframes = new RangeBGSel(0, first);
-	    }
-	  std::cerr << "Using bgframes: ";
-	  analyser.bgframes->repr( std::cerr );
-	  std::cerr << "\n";
-	}
-      
-      else if ((param = argsof( "threshold:", argv[aidx] ))) {
-        analyser.threshold = strtoul( param, &param, 0 );
-        std::cerr << "Using threshold: " << unsigned( analyser.threshold ) << "\n";
-      }
-      
-      else if ((param = argsof( "stop:", argv[aidx] ))) {
-        analyser.stop = strtoul( param, &param, 0 );
-        std::cerr << "Maximum frames: " << unsigned( analyser.stop ) << "\n";
-      }
-      
-      else if ((param = argsof( "elongation:", argv[aidx] ))) {
-        analyser.minelongation = strtod( param, &param );
-        std::cerr << "Using minimum elongation: " << analyser.minelongation << "\n";
-      }
-      
-      else {
-        if (filepath.size()) { std::cerr << "one video at a time please...\n"; return 1; }
-        filepath = argv[aidx];
-      }
+        std::string filepath;
+        char const* self; char** args;
+        Analyser& analyser;
+        bool verbose;
+      } source(argc, argv, analyser);
+      filepath = source.filepath;
+    }
+  catch (Params::Param const& param)
+    {
+      if (param.args)
+        {
+          std::cerr << "---\nParameter read error:\n  " << param.args_start << "\n  ";
+          for (char const* cp = param.args_start; cp < param.args; ++cp)
+            std::cerr << (isspace(*cp) ? *cp : ' '); /* XXX: unicode ? */
+          std::cerr << "^\n";
+        }
+      param.usage( std::cerr, 0 );
+      return 1;
     }
 
-  if (filepath.size() == 0) { std::cerr << "no video given...\n"; return 1; }
+  //  help( argv[0], std::cout );
+  return 0;
+  
   cvNamedWindow( "w", 1 );
   
   std::string prefix( filepath );
