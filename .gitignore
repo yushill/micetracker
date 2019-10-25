@@ -2,5 +2,6 @@ work
 build
 micetracker
 *.avi
+*.csv
 .errloc
 opencv*

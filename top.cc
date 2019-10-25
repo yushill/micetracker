@@ -11,9 +11,9 @@
 #include <opencv2/opencv.hpp>
 #include <inttypes.h>
 
-template <uintptr_t SZ, typename T>
-T
-argsof( char const (&prefix)[SZ], T arg )
+template <uintptr_t SZ>
+char const*
+argsof( char const (&prefix)[SZ], char const* arg )
 {
   return strncmp( &prefix[0], arg, SZ-1 ) ? 0 : &arg[SZ-1];
 }
@@ -335,7 +335,7 @@ main( int argc, char** argv )
       analyser.redraw( itr );
       imshow( "w", itr.frame );
       char k = cv::waitKey(kwait);
-      if (k == '\n')
+      if (k == '\n' or k == '\r')
         kwait = analyser.fps;
       else if (k == 'r') {
         writer.open( (prefix + "_rec.avi").c_str(), CV_FOURCC('M','J','P','G'), 25, cv::Size( analyser.width(), analyser.height() ) );
