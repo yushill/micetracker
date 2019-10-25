@@ -4,7 +4,7 @@ CPPFLAGS=-I.
 CXXFLAGS=-g3 -Wall -O3 $(shell pkg-config opencv --cflags)
 LIBS=$(shell pkg-config opencv --libs)
 
-SRCS=top.cc
+SRCS=top.cc analysis.cc
 
 OBJS=$(patsubst %.cc,$(BUILD)/%.o,$(SRCS))
 PPIS=$(patsubst %.cc,$(BUILD)/%.i,$(SRCS))
