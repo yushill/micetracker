@@ -10,9 +10,9 @@
 #include <opencv2/highgui.hpp>
 #include <inttypes.h>
 
-template <uintptr_t SZ>
-char*
-argsof( char const (&prefix)[SZ], char* arg )
+template <uintptr_t SZ, typename T>
+T
+argsof( char const (&prefix)[SZ], T arg )
 {
   return strncmp( &prefix[0], arg, SZ-1 ) ? 0 : &arg[SZ-1];
 }
@@ -76,16 +76,16 @@ struct Params
     char const* name;
     char const* args_help;
     char const* desc_help;
-    char* args_start;
-    char* args;
-    void set_args(char*_args) { args = args_start = _args; }
+    char const* args_start;
+    char const* args;
+    void set_args(char const*_args) { args = args_start = _args; }
 
-    Param& operator >> ( unsigned& value ) { value = strtoul(args,&args,0); return *this; }
-    Param& operator >> ( unsigned long& value ) { value = strtoul(args,&args,0); return *this; }
-    Param& operator >> ( unsigned long long& value ) { value = strtoull(args,&args,0); return *this; }
-    Param& operator >> ( int& value ) { value = strtol(args,&args,0); return *this; }
-    Param& operator >> ( long& value ) { value = strtol(args,&args,0); return *this; }
-    Param& operator >> ( long long& value ) { value = strtoll(args,&args,0); return *this; }
+    Param& operator >> ( unsigned& value ) { value = strtoul(args,const_cast<char**>(&args),0); return *this; }
+    Param& operator >> ( unsigned long& value ) { value = strtoul(args,const_cast<char**>(&args),0); return *this; }
+    Param& operator >> ( unsigned long long& value ) { value = strtoull(args,const_cast<char**>(&args),0); return *this; }
+    Param& operator >> ( int& value ) { value = strtol(args,const_cast<char**>(&args),0); return *this; }
+    Param& operator >> ( long& value ) { value = strtol(args,const_cast<char**>(&args),0); return *this; }
+    Param& operator >> ( long long& value ) { value = strtoll(args,const_cast<char**>(&args),0); return *this; }
     Param& operator >> ( char& ch ) { ch = *args++; return *this; }
     Param& operator >> ( bool& ch )
     {
@@ -113,7 +113,16 @@ struct Params
         }
       return *this;
     }
-    Param& operator >> ( double& value ) { value = strtod(args,&args); return *this; }
+    Param& operator >> ( double& value ) { value = strtod(args,const_cast<char**>(&args)); return *this; }
+    std::ostream& usage(std::ostream& sink, uintptr_t spacing)
+    {
+      std::ostringstream buf;
+      buf << name << ':' << args_help;
+      std::string && head = buf.str();
+      head.insert(head.end(), (spacing > head.size() ? spacing - head.size() : 0), ' ');
+      sink << head << desc_help << std::endl;
+      return sink;
+    }
   };
   
   struct Ouch {};
@@ -121,11 +130,11 @@ struct Params
   {
     for (Param _("crop", "<left>:<right>:<top>:<bottom>", "Narrows studied region by given margins."); match(_);)
       {
-        analyser().args.pop_back();
+        cfg().args.pop_back();
         char sep = ':';
         for (int idx = 0; idx < 4; ++idx) {
           if (sep != ':') throw _;
-          _ >> analyser().crop[idx] >> sep;
+          _ >> cfg().crop[idx] >> sep;
         }
         if (sep != '\0') throw _;
         return;
@@ -133,19 +142,19 @@ struct Params
 
     for (Param _("fps", "<fps value>", "Frame per second in continuous video reading."); match(_);)
       {
-        _ >> analyser().fps;
+        _ >> cfg().fps;
         return;
       }
       
     for (Param _("hilite", "<is_hilite>", "Hilite mice location."); match(_);)
       {
-        _ >> analyser().hilite;
+        _ >> cfg().hilite;
         return;
       }
 
-    for (Param _("bgframes", "<start>-<end> | <kept>/<outof>", "Frame considered for background computation."); match(_);)
+    for (Param _("bgframes", "<arg1>[[-/]<arg2>]", "Frames considered for background computation; either: a count from start, a range ('-') or a ratio ('/')"); match(_);)
       {
-        delete analyser().bgframes;
+        delete cfg().bgframes;
         uintptr_t first; char mode;
         _ >> first >> mode;
         if (mode)
@@ -153,46 +162,99 @@ struct Params
             uintptr_t second; _ >> second;
             switch (mode)
               {
-              case '-': analyser().bgframes = new RangeBGSel(first, second); break;
-              case '/': analyser().bgframes = new RatioBGSel(first, second); break;
-              default: std::cerr << "unexpected separator: " << mode << '\n'; throw _;
+              case '-': cfg().bgframes = new RangeBGSel(first, second); break;
+              case '/': cfg().bgframes = new RatioBGSel(first, second); break;
+              default: std::cerr << _.name << ": unexpected separator: " << mode << '\n'; throw _;
               }
           }
         else
           {
-            analyser().bgframes = new RangeBGSel(0, first);
+            cfg().bgframes = new RangeBGSel(0, first);
           }
         return;
       }
       
     for (Param _("threshold", "<value>", "Threshold value for detection."); match(_);)
       {
-        _ >> analyser().threshold;
+        _ >> cfg().threshold;
         return;
       }
       
     for (Param _("stop", "<bound>", "Maximum frames considered."); match(_);)
       {
-        _ >> analyser().stop;
+        _ >> cfg().stop;
         return;
       }
     
     for (Param _("elongation", "<ratio>", "Minimum mice body elongation considered for orientation"); match(_);)
       {
-        _ >> analyser().minelongation;
+        _ >> cfg().minelongation;
         return;
       }
   }
   virtual bool match(Param& _) = 0;
-  virtual Analyser& analyser() { throw 0; return *(Analyser*)0;  }
+  virtual Analyser& cfg() { throw 0; return *(Analyser*)0;  }
 };
+
+void help(char const* appname, std::ostream& sink)
+{
+  int spacing = 0;
+  struct GetSpacing : public Params
+  {
+    GetSpacing(int& _s) : s(_s) { all(); } int& s;
+    virtual bool match( Param& param ) override { int l = strlen(param.name) + strlen(param.args_help); if (s < l) s = l; return false; }
+  } gs(spacing);
+
+  sink << "Usage: " << appname << " [<param1>:<config1> <paramN>:<configN>] <movie>\n\nParameters:\n";
+  struct PrintParams : public Params
+  {
+    PrintParams(std::ostream& _sink, int _spc) : sink(_sink), spc(_spc) { all(); } std::ostream& sink; int spc;
+    virtual bool match( Param& param ) override { param.usage( sink << "  ", spc+3 ); return false; }
+  } pp(sink, spacing);
+}
 
 int
 main( int argc, char** argv )
 {
-  std::string filepath;
   Analyser analyser;
   analyser.args.push_back( argv[0] );
+  
+  struct GetParams : Params
+  {
+    GetParams( int argc, char** argv, Analyser& _analyser )
+      : self(argv[0]), args(argv), analyser(_analyser), verbose(true)
+    {
+      assert( argv[argc] == 0 );
+      while (char const* ap = *++args)
+        {
+          for (char const* h; (((h = argsof("help",ap)) and not *h) or ((h = argsof("--help",ap)) and not *h) or ((h = argsof("-h",ap)) and not *h));)
+            {
+              help(self, std::cout);
+              exit(0);
+            }
+          all();
+        }
+    }
+    virtual Analyser& cfg() override { return analyser; }
+    virtual bool match( Param& param ) override
+    {
+      char const* a = *args;
+      for (char const *b = param.name; *b; ++a, ++b)
+        { if (*a != *b) return false; }
+      if (*a++ != ':') return false;
+      param.set_args(a);
+      if (verbose)
+        { std::cerr << "[" << param.name << "] " << param.desc_help << "\n  " << a << " (" << param.args_help << ")\n"; }
+      return true;
+    }
+    char const* self; char** args;
+    Analyser& analyser;
+    bool verbose;
+  } gp(argc, argv, analyser);
+  
+  //  help( argv[0], std::cout );
+  return 0;
+  std::string filepath;
   
   for (int aidx = 1; aidx < argc; aidx += 1)
     {
