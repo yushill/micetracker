@@ -3,6 +3,7 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <map>
 #include <limits>
 #include <cmath>
 #include <cstdarg>
@@ -41,12 +42,12 @@ struct VideoFrameIterator : public FrameIterator
      if (++idx >= stop) { /* drain video */ while (not frame.empty()) { capture >> frame; } }
      return not frame.empty();
   }
+
+  double fps() { return capture.get(CV_CAP_PROP_FPS); }
   
   cv::VideoCapture capture;
   uintptr_t stop;
 };
-  
-
 
 struct RangeBGSel : public Analyser::BGSel
 {
@@ -64,6 +65,19 @@ struct RatioBGSel : public Analyser::BGSel
   
   uintptr_t first;
   uintptr_t period;
+};
+
+struct Operands
+{
+  std::string video;
+  uintptr_t framestop;
+  double keylogspeed;
+
+  Operands()
+    : video()
+    , framestop(std::numeric_limits<uintptr_t>::max())
+    , keylogspeed(0.0)
+  {}
 };
 
 struct Params
@@ -134,27 +148,21 @@ struct Params
         char sep = ':';
         for (int idx = 0; idx < 4; ++idx) {
           if (sep != ':') throw _;
-          _ >> cfg().crop[idx] >> sep;
+          _ >> ancfg().crop[idx] >> sep;
         }
         if (sep != '\0') throw _;
         return true;
       }
 
-    for (Param _("fps", "<fps value>", "Frame per second in continuous video reading."); match(_);)
-      {
-        _ >> cfg().fps;
-        return true;
-      }
-      
     for (Param _("hilite", "<is_hilite>", "Hilite mice location."); match(_);)
       {
-        _ >> cfg().hilite;
+        _ >> ancfg().hilite;
         return true;
       }
 
     for (Param _("bgframes", "<arg1>[[-/]<arg2>]", "Frames considered for background computation; either: a count from start, a range ('-') or a ratio ('/')"); match(_);)
       {
-        delete cfg().bgframes;
+        delete ancfg().bgframes;
         uintptr_t first; char mode;
         _ >> first >> mode;
         if (mode)
@@ -162,42 +170,48 @@ struct Params
             uintptr_t second; _ >> second;
             switch (mode)
               {
-              case '-': cfg().bgframes = new RangeBGSel(first, second); break;
-              case '/': cfg().bgframes = new RatioBGSel(first, second); break;
+              case '-': ancfg().bgframes = new RangeBGSel(first, second); break;
+              case '/': ancfg().bgframes = new RatioBGSel(first, second); break;
               default: std::cerr << _.name << ": unexpected separator: " << mode << '\n'; throw _;
               }
           }
         else
           {
-            cfg().bgframes = new RangeBGSel(0, first);
+            ancfg().bgframes = new RangeBGSel(0, first);
           }
         return true;
       }
       
     for (Param _("threshold", "<value>", "Threshold value for detection."); match(_);)
       {
-        _ >> cfg().threshold;
+        _ >> ancfg().threshold;
         return true;
       }
       
     for (Param _("stop", "<bound>", "Maximum frames considered."); match(_);)
       {
-        uintptr_t stop; _ >> stop;
-        set_stop( stop );
+        _ >> opcfg().framestop;
+        return true;
+      }
+
+    for (Param _("keylog", "<speed>", "Play video at <speed> and activate key logger (e.g. keylog:0.5 plays video at 2x slower)."); match(_);)
+      {
+        _ >> opcfg().keylogspeed;
         return true;
       }
     
     for (Param _("elongation", "<ratio>", "Minimum mice body elongation considered for orientation"); match(_);)
       {
-        _ >> cfg().minelongation;
+        _ >> ancfg().minelongation;
         return true;
       }
     
     return false;
   }
+  
   virtual bool match(Param& _) = 0;
-  virtual Analyser& cfg() { throw 0; return *(Analyser*)0; }
-  virtual void set_stop( uintptr_t stop ) {}
+  virtual Analyser& ancfg() { throw 0; return *(Analyser*)0; }
+  virtual Operands& opcfg() { throw 0; return *(Operands*)0; }
 };
 
 void help(char const* appname, std::ostream& sink)
@@ -221,65 +235,63 @@ int
 main( int argc, char** argv )
 {
   Analyser analyser;
+  Operands operands;
 
-  struct GetParams : Params
-  {
-    GetParams( char const* _self, Analyser& _analyser )
-      : video(), stop(std::numeric_limits<uintptr_t>::max()), self(_self), arg(), analyser(_analyser), verbose(true)
-    {
-    }
-    
-    void parse( char** args )
-    {
-      analyser.args.push_back( self );
-      while (char const* ap = arg = *++args)
-        {
-          for (char const* h; (((h = argsof("help",ap)) and not *h) or ((h = argsof("--help",ap)) and not *h) or ((h = argsof("-h",ap)) and not *h));)
-            {
-              help(self, std::cout);
-              exit(0);
-            }
-          
-          analyser.args.push_back( ap );
-          
-          if (all())
-            continue;
-              
-          if (video.size())
-            { throw Param("error", " one video at a time please...", ""); }
-          video = ap;
-        }
-          
-      if (not video.size())
-        { throw Param("error", " no video given...", ""); }
-    }
-    virtual Analyser& cfg() override { return analyser; }
-    virtual bool match( Param& param ) override
-    {
-      char const* a = arg;
-      for (char const *b = param.name; *b; ++a, ++b)
-        { if (*a != *b) return false; }
-      if (*a++ != ':') return false;
-      param.set_args(a);
-      if (verbose)
-        { std::cerr << "[" << param.name << "] " << param.desc_help << "\n  " << a << " (" << param.args_help << ")\n"; }
-      return true;
-    }
-    virtual void set_stop( uintptr_t _stop ) override { stop = _stop; }
-    
-    std::string video;
-    uintptr_t stop;
-    char const* self;
-    char const* arg;
-    Analyser& analyser;
-    bool verbose;
-  } input(argv[0], analyser);
-
-  assert( argv[argc] == 0 );
-  
   try
     {
-      input.parse( argv );
+      struct GetParams : Params
+      {
+        GetParams( char const* _self, Analyser& _analyser, Operands& _operands )
+          : self(_self), arg(), analyser(_analyser), operands(_operands), verbose(true)
+        {}
+    
+        void parse( char** args )
+        {
+          analyser.args.push_back( self );
+          while (char const* ap = arg = *++args)
+            {
+              for (char const* h; (((h = argsof("help",ap)) and not *h) or ((h = argsof("--help",ap)) and not *h) or ((h = argsof("-h",ap)) and not *h));)
+                {
+                  help(self, std::cout);
+                  exit(0);
+                }
+          
+              analyser.args.push_back( ap );
+          
+              if (all())
+                continue;
+              
+              if (operands.video.size())
+                { throw Param("error", " one video at a time please...", ""); }
+              operands.video = ap;
+            }
+          
+          if (not operands.video.size())
+            { throw Param("error", " no video given...", ""); }
+        }
+        virtual Analyser& ancfg() override { return analyser; }
+        virtual Operands& opcfg() override { return operands; }
+        virtual bool match( Param& param ) override
+        {
+          char const* a = arg;
+          for (char const *b = param.name; *b; ++a, ++b)
+            { if (*a != *b) return false; }
+          if (*a++ != ':') return false;
+          param.set_args(a);
+          if (verbose)
+            { std::cerr << "[" << param.name << "] " << param.desc_help << "\n  " << a << " (" << param.args_help << ")\n"; }
+          return true;
+        }
+    
+        char const* self;
+        char const* arg;
+        Analyser& analyser;
+        Operands& operands;
+        bool verbose;
+      } params(argv[0], analyser, operands);
+
+      assert( argv[argc] == 0 );
+      params.parse( argv );
     }
   catch (Params::Param const& param)
     {
@@ -293,10 +305,10 @@ main( int argc, char** argv )
       param.usage( std::cerr, 0 );
       return 1;
     }
-
+  
   cv::namedWindow( "w", cv::WINDOW_AUTOSIZE );
   
-  std::string prefix( input.video );
+  std::string prefix( operands.video );
   
   {
     uintptr_t idx = prefix.rfind('.');
@@ -305,7 +317,7 @@ main( int argc, char** argv )
   }
   
   std::cerr << "Pass #0\n";
-  for (VideoFrameIterator itr( input.video, input.stop ); itr.next(); )
+  for (VideoFrameIterator itr( operands.video, operands.framestop ); itr.next(); )
     {
       std::cerr << "\e[G\e[KFrame: " << itr.idx << " ";
       std::cerr.flush();
@@ -316,7 +328,7 @@ main( int argc, char** argv )
   analyser.background();
   
   std::cerr << "Pass #1\n";
-  for (VideoFrameIterator itr( input.video, input.stop ); itr.next(); )
+  for (VideoFrameIterator itr( operands.video, operands.framestop ); itr.next(); )
     {
       std::cerr << "\e[G\e[KFrame: " << itr.idx << " ";
       std::cerr.flush();
@@ -327,28 +339,47 @@ main( int argc, char** argv )
   analyser.trajectory();
   
   cv::setMouseCallback( "w", (cv::MouseCallback)mouse_callback, &analyser );
+  bool keylogger = operands.keylogspeed;
   int kwait = 0;
   cv::VideoWriter writer;
-  
-  for (VideoFrameIterator itr( input.video, input.stop ); itr.next(); )
+  typedef std::map<uintptr_t,char> KeyLog;
+  KeyLog keylog;
+    
+  for (VideoFrameIterator itr( operands.video, operands.framestop ); itr.next();)
     {
       analyser.redraw( itr );
       imshow( "w", itr.frame );
-      char k = cv::waitKey(kwait);
-      if (k == '\n' or k == '\r')
-        kwait = analyser.fps;
-      else if (k == 'r') {
-        writer.open( (prefix + "_rec.avi").c_str(), CV_FOURCC('M','J','P','G'), 25, cv::Size( analyser.width(), analyser.height() ) );
-        kwait = analyser.fps;
-      }
-      else if (k == '\b')
-        analyser.restart();
-      else if (kwait == 0) {
-        std::cerr << "KeyCode: " << int(k) << "\n";
-      }
-      
+      int k = cv::waitKey(kwait);
+
       if (writer.isOpened())
         writer << itr.frame;
+      
+      if (k == -1)
+        continue;
+      
+      if (kwait)
+        {
+          // Play mode, log key if necessary
+          if (keylogger)
+            keylog.insert(KeyLog::value_type(itr.idx, k));
+          continue;
+        }
+
+      switch (k)
+        {
+        case 'r':
+          writer.open( (prefix + "_rec.avi").c_str(), CV_FOURCC('M','J','P','G'), 25, cv::Size( analyser.width(), analyser.height() ) );
+          /* move on to set kwait */
+        case '\n': case '\r':
+          kwait = keylogger ? std::max<int>(1000./(itr.fps()*operands.keylogspeed), 1) : 1;
+          break;
+        case '\b': 
+          analyser.restart();
+          break;
+        default:
+          std::cerr << "KeyCode: " << k << "\n";
+          break;
+        }
     }
   
   if (writer.isOpened())
