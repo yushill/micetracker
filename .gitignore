@@ -1,6 +1,6 @@
 work
 build
-micetracker
+micetracker*
 *.avi
 *.csv
 .errloc
