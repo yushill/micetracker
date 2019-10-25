@@ -6,8 +6,9 @@
 #include <limits>
 #include <cmath>
 #include <cstdarg>
-#include <opencv2/opencv.hpp>
 #include <opencv2/highgui.hpp>
+#include <opencv2/videoio.hpp>
+#include <opencv2/opencv.hpp>
 #include <inttypes.h>
 
 template <uintptr_t SZ, typename T>
@@ -17,28 +18,6 @@ argsof( char const (&prefix)[SZ], T arg )
   return strncmp( &prefix[0], arg, SZ-1 ) ? 0 : &arg[SZ-1];
 }
 
-std::string
-stringf( char const* _fmt, ... )
-{
-  std::string str;
-  va_list ap;
-
-  for (intptr_t capacity = 128, size; true; capacity = (size > -1) ? size + 1 : capacity * 2) {
-    /* allocation */
-    char storage[capacity];
-    /* Try to print in the allocated space. */
-    va_start( ap, _fmt );
-    size = vsnprintf( storage, capacity, _fmt, ap );
-    va_end( ap );
-    /* If it worked, return */
-    if (size >= 0 and size < capacity) {
-      str.append( storage, size );
-      break;
-    }
-  }
-  return str;
-}
-
 void
 mouse_callback( int event, int x, int y, int flags, Analyser* analyser )
 {
@@ -46,11 +25,33 @@ mouse_callback( int event, int x, int y, int flags, Analyser* analyser )
     analyser->click( x, y );
 }
 
+struct VideoFrameIterator : public FrameIterator
+{
+  VideoFrameIterator( std::string path, uintptr_t _stop ) 
+    : FrameIterator()
+    , capture( path.c_str() )
+    , stop( _stop )
+  {
+    if (not capture.isOpened()) throw "Error when reading avi file";
+  }
+
+  virtual bool next() override
+  {
+     capture >> frame;
+     if (++idx >= stop) { /* drain video */ while (not frame.empty()) { capture >> frame; } }
+     return not frame.empty();
+  }
+  
+  cv::VideoCapture capture;
+  uintptr_t stop;
+};
+  
+
+
 struct RangeBGSel : public Analyser::BGSel
 {
   RangeBGSel( uintptr_t _lower, uintptr_t _upper ) : lower(_lower), upper(_upper) {}
   virtual bool accept( uintptr_t frame ) override { return (frame >= lower and frame < upper); }
-  virtual void repr( std::ostream& sink ) override { sink << "Range( " << lower << ", " << upper << " )"; };
   
   uintptr_t lower;
   uintptr_t upper;
@@ -60,7 +61,6 @@ struct RatioBGSel : public Analyser::BGSel
 {
   RatioBGSel( uintptr_t _first, uintptr_t _second ) : first(_first), period(_first+_second) {}
   virtual bool accept( uintptr_t frame ) override { return (frame % period) < first; }
-  virtual void repr( std::ostream& sink ) override { sink << "Ratio( " << first << ", " << (period-first) << " )"; };
   
   uintptr_t first;
   uintptr_t period;
@@ -126,11 +126,11 @@ struct Params
   };
   
   struct Ouch {};
+  
   bool all()
   {
     for (Param _("crop", "<left>:<right>:<top>:<bottom>", "Narrows studied region by given margins."); match(_);)
       {
-        cfg().args.pop_back();
         char sep = ':';
         for (int idx = 0; idx < 4; ++idx) {
           if (sep != ':') throw _;
@@ -182,7 +182,8 @@ struct Params
       
     for (Param _("stop", "<bound>", "Maximum frames considered."); match(_);)
       {
-        _ >> cfg().stop;
+        uintptr_t stop; _ >> stop;
+        set_stop( stop );
         return true;
       }
     
@@ -195,7 +196,8 @@ struct Params
     return false;
   }
   virtual bool match(Param& _) = 0;
-  virtual Analyser& cfg() { throw 0; return *(Analyser*)0;  }
+  virtual Analyser& cfg() { throw 0; return *(Analyser*)0; }
+  virtual void set_stop( uintptr_t stop ) {}
 };
 
 void help(char const* appname, std::ostream& sink)
@@ -219,56 +221,65 @@ int
 main( int argc, char** argv )
 {
   Analyser analyser;
-  analyser.args.push_back( argv[0] );
 
-  std::string filepath;
+  struct GetParams : Params
+  {
+    GetParams( char const* _self, Analyser& _analyser )
+      : video(), stop(std::numeric_limits<uintptr_t>::max()), self(_self), arg(), analyser(_analyser), verbose(true)
+    {
+    }
+    
+    void parse( char** args )
+    {
+      analyser.args.push_back( self );
+      while (char const* ap = arg = *++args)
+        {
+          for (char const* h; (((h = argsof("help",ap)) and not *h) or ((h = argsof("--help",ap)) and not *h) or ((h = argsof("-h",ap)) and not *h));)
+            {
+              help(self, std::cout);
+              exit(0);
+            }
+          
+          analyser.args.push_back( ap );
+          
+          if (all())
+            continue;
+              
+          if (video.size())
+            { throw Param("error", " one video at a time please...", ""); }
+          video = ap;
+        }
+          
+      if (not video.size())
+        { throw Param("error", " no video given...", ""); }
+    }
+    virtual Analyser& cfg() override { return analyser; }
+    virtual bool match( Param& param ) override
+    {
+      char const* a = arg;
+      for (char const *b = param.name; *b; ++a, ++b)
+        { if (*a != *b) return false; }
+      if (*a++ != ':') return false;
+      param.set_args(a);
+      if (verbose)
+        { std::cerr << "[" << param.name << "] " << param.desc_help << "\n  " << a << " (" << param.args_help << ")\n"; }
+      return true;
+    }
+    virtual void set_stop( uintptr_t _stop ) override { stop = _stop; }
+    
+    std::string video;
+    uintptr_t stop;
+    char const* self;
+    char const* arg;
+    Analyser& analyser;
+    bool verbose;
+  } input(argv[0], analyser);
+
+  assert( argv[argc] == 0 );
   
   try
     {
-      struct GetParams : Params
-      {
-        GetParams( int argc, char** argv, Analyser& _analyser )
-          : filepath(), self(argv[0]), args(argv), analyser(_analyser), verbose(true)
-        {
-          assert( argv[argc] == 0 );
-          while (char const* ap = *++args)
-            {
-              for (char const* h; (((h = argsof("help",ap)) and not *h) or ((h = argsof("--help",ap)) and not *h) or ((h = argsof("-h",ap)) and not *h));)
-                {
-                  help(self, std::cout);
-                  exit(0);
-                }
-              analyser.args.push_back( ap );
-
-              bool is_param = all();
-              if (not is_param)
-                {
-                  if (filepath.size())
-                    { throw Param("error", " one video at a time please...", ""); }
-                  filepath = ap;
-                }
-            }
-          if (not filepath.size())
-            { throw Param("error", " no video given...", ""); }
-        }
-        virtual Analyser& cfg() override { return analyser; }
-        virtual bool match( Param& param ) override
-        {
-          char const* a = *args;
-          for (char const *b = param.name; *b; ++a, ++b)
-            { if (*a != *b) return false; }
-          if (*a++ != ':') return false;
-          param.set_args(a);
-          if (verbose)
-            { std::cerr << "[" << param.name << "] " << param.desc_help << "\n  " << a << " (" << param.args_help << ")\n"; }
-          return true;
-        }
-        std::string filepath;
-        char const* self; char** args;
-        Analyser& analyser;
-        bool verbose;
-      } source(argc, argv, analyser);
-      filepath = source.filepath;
+      input.parse( argv );
     }
   catch (Params::Param const& param)
     {
@@ -283,12 +294,9 @@ main( int argc, char** argv )
       return 1;
     }
 
-  //  help( argv[0], std::cout );
-  return 0;
+  cv::namedWindow( "w", cv::WINDOW_AUTOSIZE );
   
-  cvNamedWindow( "w", 1 );
-  
-  std::string prefix( filepath );
+  std::string prefix( input.video );
   
   {
     uintptr_t idx = prefix.rfind('.');
@@ -297,7 +305,7 @@ main( int argc, char** argv )
   }
   
   std::cerr << "Pass #0\n";
-  for (FrameIterator itr( filepath, analyser.stop ); itr.next(); )
+  for (VideoFrameIterator itr( input.video, input.stop ); itr.next(); )
     {
       std::cerr << "\e[G\e[KFrame: " << itr.idx << " ";
       std::cerr.flush();
@@ -308,7 +316,7 @@ main( int argc, char** argv )
   analyser.background();
   
   std::cerr << "Pass #1\n";
-  for (FrameIterator itr( filepath, analyser.stop ); itr.next(); )
+  for (VideoFrameIterator itr( input.video, input.stop ); itr.next(); )
     {
       std::cerr << "\e[G\e[KFrame: " << itr.idx << " ";
       std::cerr.flush();
@@ -322,11 +330,11 @@ main( int argc, char** argv )
   int kwait = 0;
   cv::VideoWriter writer;
   
-  for (FrameIterator itr( filepath, analyser.stop ); itr.next(); )
+  for (VideoFrameIterator itr( input.video, input.stop ); itr.next(); )
     {
       analyser.redraw( itr );
       imshow( "w", itr.frame );
-      char k = cvWaitKey(kwait);
+      char k = cv::waitKey(kwait);
       if (k == '\n')
         kwait = analyser.fps;
       else if (k == 'r') {
@@ -346,7 +354,7 @@ main( int argc, char** argv )
   if (writer.isOpened())
     writer.release();
   
-  cvDestroyWindow( "w" );
+  cv::destroyWindow( "w" );
   
   std::ofstream sink( (prefix + ".csv").c_str() );
   analyser.dumpresults( sink );

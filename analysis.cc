@@ -1,14 +1,22 @@
 #include <analysis.hh>
 #include <iostream>
+#include <sstream>
 #include <set>
 #include <unistd.h>
 
 Analyser::Analyser()
-  : records(), ref(), minelongation( 1.3 )
-  , crop(), stop( std::numeric_limits<uintptr_t>::max() )
-  , lastclick( -1, -1 ), bgframes(0), fps(1), threshold( 0x40 ), hilite(false)
+  : records()
+  , ref()
+  , minelongation( 1.3 )
+  , crop()
+  , lastclick( -1, -1 )
+  , bgframes()
+  , fps(1)
+  , threshold( 0x40 )
+  , hilite(false)
 {
-  for (int idx = 0; idx < 4; ++idx) crop[idx] = 0;
+  static struct : public BGSel { virtual bool accept( uintptr_t frame ) { return true; } } select_all;
+  bgframes = &select_all;
 }
   
 void

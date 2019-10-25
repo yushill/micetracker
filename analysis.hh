@@ -1,7 +1,6 @@
 #ifndef __ANALYSIS_HH__
 #define __ANALYSIS_HH__
 
-#include <opencv2/videoio.hpp>
 #include <opencv2/core/mat.hpp>
 #include <geometry.hh>
 #include <vector>
@@ -9,30 +8,13 @@
 
 struct FrameIterator
 {
-  cv::Mat frame;
-  uintptr_t idx, stop;
+  FrameIterator() : frame(), idx() {}
+  virtual ~FrameIterator() {}
   
-  FrameIterator( std::string _fp, uintptr_t _stop )
-    : frame(), idx(), stop( _stop ), capture( _fp.c_str() )
-  {
-    if (not capture.isOpened()) throw "Error when reading avi file";
-  }
-  
-  ~FrameIterator()
-  {}
-  
-  bool
-  next()
-  {
-    capture >> frame;
-    ++idx;
-    if (idx >= stop) { /* drain the movie */ while (not frame.empty()) { capture >> frame; ++idx; } }
-    return not frame.empty();
-  }
+  virtual bool next() = 0;
 
-  
-private:
-  cv::VideoCapture capture;
+  cv::Mat frame;
+  uintptr_t idx;
 };
   
 struct Mice
@@ -65,7 +47,6 @@ struct Analyser
   struct BGSel
   {
     virtual bool accept( uintptr_t frame ) = 0;
-    virtual void repr( std::ostream& ) = 0;
     virtual ~BGSel() {}
   };
 
@@ -75,7 +56,6 @@ struct Analyser
   std::vector<Mice>   mices;
   double              minelongation;
   uintptr_t           crop[4];
-  uintptr_t           stop;
   typedef std::vector<std::string> Args;
   Args                args;
   Point<int>          lastclick;
