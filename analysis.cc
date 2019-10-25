@@ -61,7 +61,6 @@ Analyser::pass0( FrameIterator const& fi )
       ref = img.clone();
     }
   if ((values.size() != compcount) or ref.empty()) throw Ouch();
-  uintptr_t const step = img.step;
 
   if (not bgframes->accept( fi.idx ))
     return;
@@ -111,7 +110,6 @@ Analyser::pass1( cv::Mat const& img )
     
   uintptr_t height = img.rows, width = img.cols, channels = img.channels();
     
-  uintptr_t const step = img.step;
   Point<double> center(0.,0.);
   double xxv = 0.0, yyv = 0.0, xyv = 0.0, sum = 0.0;
   for (uintptr_t y = 0, ry = height; y < height; ++y, --ry) {
@@ -157,7 +155,6 @@ Analyser::redraw( FrameIterator& _fi )
     
   uintptr_t height = img.rows, width = img.cols, channels = img.channels();
     
-  uintptr_t const step = img.step;
   for (uintptr_t y = 0, ry = height; y < height; ++y, --ry) {
     bool docrop = (y < crop[2]) or (ry <= crop[3]);
     uint8_t* irow = img.ptr<uint8_t>(y);
