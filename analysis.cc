@@ -15,8 +15,8 @@ Analyser::Analyser()
   , threshold( 0x40 )
   , hilite(false)
 {
-  static struct : public BGSel { virtual bool accept( uintptr_t frame ) { return true; } } select_all;
-  bgframes = &select_all;
+  struct SelectAll : public BGSel { virtual bool accept( uintptr_t frame ) { return true; } };
+  bgframes = new SelectAll();
 }
   
 void
