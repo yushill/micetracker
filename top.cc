@@ -154,7 +154,7 @@ struct Params
         return true;
       }
 
-    for (Param _("hilite", "<is_hilite>", "Hilite mice location."); match(_);)
+    for (Param _("hilite", "[y/n]", "Hilite mice location."); match(_);)
       {
         _ >> ancfg().hilite;
         return true;
@@ -306,8 +306,6 @@ main( int argc, char** argv )
       return 1;
     }
   
-  cv::namedWindow( "w", cv::WINDOW_AUTOSIZE );
-  
   std::string prefix( operands.video );
   
   {
@@ -337,6 +335,8 @@ main( int argc, char** argv )
   std::cerr << std::endl;
   
   analyser.trajectory();
+  
+  cv::namedWindow( "w", cv::WINDOW_AUTOSIZE );
   
   cv::setMouseCallback( "w", (cv::MouseCallback)mouse_callback, &analyser );
   bool keylogger = operands.keylogspeed;
