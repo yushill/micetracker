@@ -1,7 +1,7 @@
 CXX?=g++
 
 CPPFLAGS=-I.
-CXXFLAGS=-g3 -Wall -O0 $(shell pkg-config opencv --cflags)
+CXXFLAGS=-g3 -Wall -O2 $(shell pkg-config opencv --cflags)
 LIBS=$(shell pkg-config opencv --libs)
 
 SRCS=top.cc analysis.cc

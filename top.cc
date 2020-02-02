@@ -32,8 +32,20 @@ struct VideoFrameIterator : public FrameIterator
     : FrameIterator()
     , capture( path.c_str() )
     , stop( _stop )
+    , fps(capture.get(CV_CAP_PROP_FPS))
   {
     if (not capture.isOpened()) throw "Error when reading avi file";
+  }
+
+  double sec() const { return double(idx) / fps; }
+
+  void progress( std::ostream& term ) const
+  {
+    uintptr_t ufps = fps;
+    if (idx % ufps)
+      return;
+    term << "\e[G\e[KDone: " << (idx / ufps) << "s ";
+    term.flush();
   }
 
   virtual bool next() override
@@ -43,10 +55,9 @@ struct VideoFrameIterator : public FrameIterator
      return not frame.empty();
   }
 
-  double fps() { return capture.get(CV_CAP_PROP_FPS); }
-  
   cv::VideoCapture capture;
   uintptr_t stop;
+  double fps;
 };
 
 struct RangeBGSel : public Analyser::BGSel
@@ -317,8 +328,7 @@ main( int argc, char** argv )
   std::cerr << "Pass #0\n";
   for (VideoFrameIterator itr( operands.video, operands.framestop ); itr.next(); )
     {
-      std::cerr << "\e[G\e[KFrame: " << itr.idx << " ";
-      std::cerr.flush();
+      itr.progress(std::cerr);
       analyser.pass0( itr );
     }
   std::cerr << std::endl;
@@ -328,8 +338,7 @@ main( int argc, char** argv )
   std::cerr << "Pass #1\n";
   for (VideoFrameIterator itr( operands.video, operands.framestop ); itr.next(); )
     {
-      std::cerr << "\e[G\e[KFrame: " << itr.idx << " ";
-      std::cerr.flush();
+      itr.progress(std::cerr);
       analyser.pass1( itr.frame );
     }
   std::cerr << std::endl;
@@ -342,7 +351,7 @@ main( int argc, char** argv )
   bool keylogger = operands.keylogspeed;
   int kwait = 0;
   cv::VideoWriter writer;
-  typedef std::map<uintptr_t,char> KeyLog;
+  typedef std::map<double,char> KeyLog;
   KeyLog keylog;
     
   for (VideoFrameIterator itr( operands.video, operands.framestop ); itr.next();)
@@ -361,7 +370,7 @@ main( int argc, char** argv )
         {
           // Play mode, log key if necessary
           if (keylogger)
-            keylog.insert(KeyLog::value_type(itr.idx, k));
+            keylog.insert(KeyLog::value_type(itr.sec(), k));
           continue;
         }
 
@@ -371,7 +380,7 @@ main( int argc, char** argv )
           writer.open( (prefix + "_rec.avi").c_str(), CV_FOURCC('M','J','P','G'), 25, cv::Size( analyser.width(), analyser.height() ) );
           /* move on to set kwait */
         case '\n': case '\r':
-          kwait = keylogger ? std::max<int>(1000./(itr.fps()*operands.keylogspeed), 1) : 1;
+          kwait = keylogger ? std::max<int>(1000./(itr.fps*operands.keylogspeed), 1) : 1;
           break;
         case '\b': 
           analyser.restart();
@@ -389,6 +398,13 @@ main( int argc, char** argv )
   
   std::ofstream sink( (prefix + ".csv").c_str() );
   analyser.dumpresults( sink );
+
+  if (keylog.size())
+    {
+      std::ofstream sink( (prefix + "_keys.csv").c_str() );
+      for (KeyLog::value_type const& key : keylog)
+	sink << key.first << "," << key.second << "\n";
+    }
   
   return 0;
 }
