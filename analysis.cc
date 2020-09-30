@@ -337,6 +337,8 @@ Analyser::dumpresults( std::ostream& sink )
   for (std::vector<Mice>::const_iterator itr = this->mices.begin(), end = this->mices.end(); itr != end; ++itr)
     {
       sink << itr->elongation() << ',' << itr->p.x << ',' << -itr->p.y << ','
-           << itr->ep0().x << ',' << -itr->ep0().y << ',' << itr->ep1().x << ',' << -itr->ep1().y << ',' << itr->mjr << ',' << itr->mnr << '\n';
+           << itr->ep0().x << ',' << -itr->ep0().y << ',' << itr->ep1().x << ',' << -itr->ep1().y
+           << int(itr->valid)
+           << ',' << itr->mjr << ',' << itr->mnr << '\n';
     }
 }
