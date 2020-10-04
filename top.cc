@@ -216,7 +216,12 @@ struct Params
         _ >> ancfg().minelongation;
         return true;
       }
-    
+
+    for (Param _("soundsize", "[y/N]", "requires coherent tracked mice size (within 2x folds of median, else discarded)"); match(_);)
+      {
+        _ >> ancfg().soundsize;
+        return true;
+      }
     return false;
   }
   
@@ -231,14 +236,14 @@ void help(char const* appname, std::ostream& sink)
   struct GetSpacing : public Params
   {
     GetSpacing(int& _s) : s(_s) { all(); } int& s;
-    virtual bool match( Param& param ) override { int l = strlen(param.name) + strlen(param.args_help); if (s < l) s = l; return false; }
+    virtual bool match(Param& param) override { int l = strlen(param.name) + strlen(param.args_help); if (s < l) s = l; return false; }
   } gs(spacing);
 
   sink << "Usage: " << appname << " [<param1>:<config1> <paramN>:<configN>] <video>\n\nParameters:\n";
   struct PrintParams : public Params
   {
     PrintParams(std::ostream& _sink, int _spc) : sink(_sink), spc(_spc) { all(); } std::ostream& sink; int spc;
-    virtual bool match( Param& param ) override { param.usage( sink << "  ", spc+3 ); return false; }
+    virtual bool match(Param& param) override { param.usage( sink << "  ", spc+3 ); return false; }
   } pp(sink, spacing);
 }
 
@@ -282,7 +287,7 @@ main( int argc, char** argv )
         }
         virtual Analyser& ancfg() override { return analyser; }
         virtual Operands& opcfg() override { return operands; }
-        virtual bool match( Param& param ) override
+        virtual bool match(Param& param) override
         {
           char const* a = arg;
           for (char const *b = param.name; *b; ++a, ++b)
@@ -326,14 +331,16 @@ main( int argc, char** argv )
   }
   
   std::cerr << "Pass #0\n";
-  for (VideoFrameIterator itr( operands.video, operands.framestop ); itr.next(); )
-    {
-      itr.progress(std::cerr);
-      analyser.pass0( itr );
-    }
-  std::cerr << std::endl;
-
-  analyser.background();
+  {
+    Analyser::Pass0 pass0;
+    for (VideoFrameIterator itr( operands.video, operands.framestop ); itr.next(); )
+      {
+        itr.progress(std::cerr);
+        analyser.step( itr, pass0 );
+      }
+    std::cerr << std::endl;
+    analyser.finish( pass0 );
+  }
   
   std::cerr << "Pass #1\n";
   for (VideoFrameIterator itr( operands.video, operands.framestop ); itr.next(); )

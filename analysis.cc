@@ -5,8 +5,7 @@
 #include <unistd.h>
 
 Analyser::Analyser()
-  : records()
-  , ref()
+  : bg()
   , minelongation( 1.3 )
   , crop()
   , lastclick( -1, -1 )
@@ -14,6 +13,7 @@ Analyser::Analyser()
   , fps(1)
   , threshold( 0x40 )
   , hilite(false)
+  , soundsize(false)
 {
   struct SelectAll : public BGSel { virtual bool accept( uintptr_t frame ) { return true; } };
   bgframes = new SelectAll();
@@ -53,22 +53,41 @@ Analyser::restart()
   execvp( newargs[0], &newargs[0] );
   throw 0; // should not be here
 }
+
+/* step: setup step data and performs basic sanity checks
+ * returns: true if step is first
+ */
+bool
+Analyser::Pass0::step(uintptr_t compcount)
+{
+  records += 1;
+  if (values.size() == 0)
+    {
+      values.resize(compcount);
+      return true;
+    }
+  else if (values.size() != compcount)
+    throw Analyser::Ouch();
+  return false;
+}
   
 void
-Analyser::pass0( FrameIterator const& fi )
+Analyser::step( FrameIterator const& fi, Pass0& pass0 )
 {
+  /* First pass 'pass0' gathers maximum info collectible from first
+   * pass: (1) movie dimensions (Y,X,L) (2) Summing background values
+   * for background computation
+   */
   cv::Mat const& img = fi.frame;
   if (img.depth() != CV_8U) throw Ouch();
   // for (int idx = 0; idx < 3; ++idx) if (img->colorModel[idx] == "RGB"[3]) throw Ouch();
   // for (int idx = 0; idx < 3; ++idx) if (img->channelSeq[idx] == "RGB"[3]) throw Ouch();
     
   uintptr_t height = img.rows, width = img.cols, channels = img.channels(), compcount = width * height * channels;
-  if (values.size() == 0)
-    {
-      values.resize( compcount );
-      ref = img.clone();
-    }
-  if ((values.size() != compcount) or ref.empty()) throw Ouch();
+  if (pass0.step(compcount))
+    bg = img.clone();
+  
+  if (bg.empty()) throw Ouch();
 
   if (not bgframes->accept( fi.idx ))
     return;
@@ -81,27 +100,26 @@ Analyser::pass0( FrameIterator const& fi )
           {
             uintptr_t imgidx = x*channels + c;
             uintptr_t bgdidx = (y*width + x)*channels + c;
-            values[bgdidx] += (double)(unsigned)(row[imgidx]);
+            pass0.add(bgdidx, (unsigned)(row[imgidx]));
           }
     }
     
-  records += 1;
 }
   
 void
-Analyser::background()
+Analyser::finish( Pass0& pass0 )
 {
-  uintptr_t height = ref.rows, width = ref.cols, channels = ref.channels();
+  uintptr_t height = bg.rows, width = bg.cols, channels = bg.channels();
     
   for (uintptr_t y = 0; y < height; ++y)
     {
-      uint8_t* row = ref.ptr<uint8_t>(y);
+      uint8_t* row = bg.ptr<uint8_t>(y);
       for (uintptr_t x = 0; x < width; ++x)
         for (uintptr_t c = 0; c < channels; ++c)
           {
             uintptr_t imgidx = x*channels + c;
             uintptr_t bgdidx = (y*width + x)*channels + c;
-            row[imgidx] = uint8_t(int((values[bgdidx] / records) + .5));
+            row[imgidx] = uint8_t(int(pass0.avg(bgdidx)));
           }
     }
     
@@ -111,42 +129,52 @@ void
 Analyser::pass1( cv::Mat const& img )
 {
   if (img.depth() != CV_8U) throw Ouch();
-  if ((ref.rows != img.rows) or (ref.cols != img.cols) or
-      (ref.channels() != img.channels()) or (ref.step != img.step)) throw Ouch();
+  if ((bg.rows != img.rows) or (bg.cols != img.cols) or
+      (bg.channels() != img.channels()) or (bg.step != img.step)) throw Ouch();
   // for (int idx = 0; idx < 3; ++idx) if (img->colorModel[idx] == "RGB"[3]) throw Ouch();
   // for (int idx = 0; idx < 3; ++idx) if (img->channelSeq[idx] == "RGB"[3]) throw Ouch();
     
   uintptr_t height = img.rows, width = img.cols, channels = img.channels();
-    
+
+  // Computing center and orientation of the deviation from background
   Point<double> center(0.,0.);
   double xxv = 0.0, yyv = 0.0, xyv = 0.0, sum = 0.0;
-  for (uintptr_t y = 0, ry = height; y < height; ++y, --ry) {
-    if ((y < crop[2]) or (ry <= crop[3])) continue;
-    uint8_t const* irow = img.ptr<uint8_t>(y);
-    uint8_t* brow = ref.ptr<uint8_t>(y);
-    for (uintptr_t x = 0, rx = width; x < width; ++x, --rx) {
-      uintptr_t imgidx = x*channels;
-      uint8_t const* ipix = &irow[imgidx];
-      if ((x < crop[0]) or (rx <= crop[1])) continue;
-      uint8_t* bpix = &brow[imgidx];
-      uint8_t bgr[3] = {0};
-      for (uintptr_t c = 0; c < channels; ++c)
-        bgr[c] = abs( (int)ipix[c] - (int)bpix[c] );
-      uint8_t l = (0x4c8b43*bgr[2] + 0x9645a2*bgr[1] + 0x1d2f1b*bgr[0] + 0x800000) >> 24;
-      if (l < threshold) continue;
-      center += Point<double>( x, y )*l;
-      sum += l;
-      xxv += x*x*l; yyv += y*y*l; xyv += x*y*l;
+  for (uintptr_t y = 0, ry = height; y < height; ++y, --ry)
+    {
+      if ((y < crop[2]) or (ry <= crop[3]))
+        continue;
+      uint8_t const* irow = img.ptr<uint8_t>(y);
+      uint8_t* brow = bg.ptr<uint8_t>(y);
+      for (uintptr_t x = 0, rx = width; x < width; ++x, --rx)
+        {
+          if ((x < crop[0]) or (rx <= crop[1]))
+            continue;
+          uintptr_t imgidx = x*channels;
+          uint8_t const* ipix = &irow[imgidx];
+          uint8_t* bpix = &brow[imgidx];
+          // Computing deviation from background
+          uint8_t dev[3] = {0};
+          for (uintptr_t c = 0; c < channels; ++c)
+            dev[c] = abs( (int)ipix[c] - (int)bpix[c] );
+          // Computing luminescence
+          uint8_t l = (0x4c8b43*dev[2] + 0x9645a2*dev[1] + 0x1d2f1b*dev[0] + 0x800000) >> 24;
+          if (l < threshold) continue;
+          center += Point<double>( x, y )*l;
+          sum += l;
+          xxv += x*x*l; yyv += y*y*l; xyv += x*y*l;
+        }
     }
-  }
+  // Averaging first and second orders sums
   center.x /= sum; center.y /= sum;
   xxv /= sum; yyv /= sum; xyv /= sum;
   xxv -= center.x*center.x; yyv -= center.y*center.y; xyv -= center.x*center.y;
-    
+
+  // Computing final deviation blob (mice ?) params.
   double dif = (yyv-xxv)/2;
   double t0 = sqrt( xyv*xyv + dif*dif );
   Point<double> direction( xyv + t0 - dif, xyv + t0 + dif );
   { double norm = 1/sqrt( direction.sqnorm() ); direction *= norm; }
+  // Major is the extension in the direction of mice and minor is perpendicular
   double mjr = sqrt( (xxv+yyv)/2 + t0 ), mnr = sqrt( (xxv+yyv)/2 - t0 );
   mices.push_back( Mice( center, direction, mjr, mnr ) );
 }
@@ -156,8 +184,8 @@ Analyser::redraw( FrameIterator& _fi )
 {
   cv::Mat& img = _fi.frame;
   if (img.depth() != CV_8U) throw Ouch();
-  if ((ref.rows != img.rows) or (ref.cols != img.cols) or
-      (ref.channels() != img.channels()) or (ref.step != img.step)) throw Ouch();
+  if ((bg.rows != img.rows) or (bg.cols != img.cols) or
+      (bg.channels() != img.channels()) or (bg.step != img.step)) throw Ouch();
   // for (int idx = 0; idx < 3; ++idx) if (img->colorModel[idx] == "RGB"[3]) throw Ouch();
   // for (int idx = 0; idx < 3; ++idx) if (img->channelSeq[idx] == "RGB"[3]) throw Ouch();
     
@@ -166,21 +194,21 @@ Analyser::redraw( FrameIterator& _fi )
   for (uintptr_t y = 0, ry = height; y < height; ++y, --ry) {
     bool docrop = (y < crop[2]) or (ry <= crop[3]);
     uint8_t* irow = img.ptr<uint8_t>(y);
-    uint8_t* brow = ref.ptr<uint8_t>(y);
+    uint8_t* brow = bg.ptr<uint8_t>(y);
     for (uintptr_t x = 0, rx = width; x < width; ++x, --rx) {
       uintptr_t imgidx = x*channels;
       uint8_t* ipix = &irow[imgidx];
       if (docrop or (x < crop[0]) or (rx <= crop[1]))
         { ipix[0] ^= 0xff; ipix[1] ^= 0xff; ipix[2] ^= 0xff; continue; }
       uint8_t* bpix = &brow[imgidx];
-      uint8_t bgr[3] = {0};
+      uint8_t dev[3] = {0};
       for (uintptr_t c = 0; c < channels; ++c)
-        bgr[c] = abs( (int)ipix[c] - (int)bpix[c] );
-      uint8_t l = (0x4c8b43*bgr[2] + 0x9645a2*bgr[1] + 0x1d2f1b*bgr[0] + 0x800000) >> 24;
+        dev[c] = abs( (int)ipix[c] - (int)bpix[c] );
+      uint8_t l = (0x4c8b43*dev[2] + 0x9645a2*dev[1] + 0x1d2f1b*dev[0] + 0x800000) >> 24;
       if (hilite and (l >= threshold))
         { ipix[0] ^= 0xff; ipix[1] ^= 0x00; ipix[2] ^= 0xff; continue; }
       // if () { /* ipix[0] = 0x00;   ipix[1] = 0x00;   ipix[2] = 0x00; */ continue; }
-      // else               { /* ipix[0] = bgr[0]; ipix[1] = bgr[1]; ipix[2] = bgr[2]; */ }
+      // else               { /* ipix[0] = dev[0]; ipix[1] = dev[1]; ipix[2] = dev[2]; */ }
       //ipix[0] = 0xff; ipix[1] = 0xff; ipix[2] = 0xff;
     }
   }
@@ -227,12 +255,15 @@ Analyser::trajectory()
   }
   std::cerr << "median: " << median << std::endl;
 
-  // Invalidating suspicious data
-  for (std::vector<Mice>::iterator itr = mices.begin(), end = mices.end(); itr != end; ++itr) {
-    if (itr->hasnan()) continue;
-    double d = itr->distance();
-    if ((d >= median*2) or (d <= median/2)) itr->invalidate();
-  }
+  if (soundsize)
+    {
+      // Invalidating suspicious data
+      for (std::vector<Mice>::iterator itr = mices.begin(), end = mices.end(); itr != end; ++itr) {
+        if (itr->hasnan()) continue;
+        double d = itr->distance();
+        if ((d >= median*2) or (d <= median/2)) itr->invalidate();
+      }
+    }
     
     
   { // Extrapolating missing positions.
@@ -325,8 +356,8 @@ Analyser::dumpresults( std::ostream& sink )
   sink << '\n';
     
   uintptr_t bounds[4] = {
-                         crop[0], ref.cols - crop[1],
-                         crop[2], ref.rows - crop[3]
+                         crop[0], bg.cols - crop[1],
+                         crop[2], bg.rows - crop[3]
   };
     
   sink << "bounds_lrtb," << bounds[0] << ',' << bounds[1] << ",-" << bounds[2] << ",-" << bounds[3] << ','
