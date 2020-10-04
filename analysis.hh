@@ -50,9 +50,17 @@ struct Analyser
     virtual ~BGSel() {}
   };
 
-  uintptr_t           records;
-  std::vector<double> values;
-  cv::Mat             ref;
+  struct Pass0
+  {
+    Pass0() : values(), records(0) {}
+    bool step(uintptr_t);
+    double avg(uintptr_t idx) { return (values[idx] / records) + .5; }
+    void add(uintptr_t idx, double val) { values[idx] += val; }
+    std::vector<double> values;
+    uintptr_t           records;
+  };
+
+  cv::Mat             bg;
   std::vector<Mice>   mices;
   double              minelongation;
   uintptr_t           crop[4];
@@ -64,6 +72,7 @@ struct Analyser
   unsigned            fps;
   unsigned            threshold;
   bool                hilite;
+  bool                soundsize;
   
   Analyser();
   
@@ -74,12 +83,12 @@ struct Analyser
   
   struct Ouch {};
   
-  void pass0( FrameIterator const& fi );
+  void step( FrameIterator const& fi, Pass0& );
+  void finish( Pass0& );
   
-  uintptr_t height() const { return ref.empty() ? 0 : ref.rows; }
-  uintptr_t width() const { return ref.empty() ? 0 : ref.cols; }
+  uintptr_t height() const { return bg.empty() ? 0 : bg.rows; }
+  uintptr_t width() const { return bg.empty() ? 0 : bg.cols; }
   
-  void background();
   
   void pass1( cv::Mat const& img );
   
