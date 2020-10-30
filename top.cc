@@ -83,11 +83,13 @@ struct Operands
   std::string video;
   uintptr_t framestop;
   double keylogspeed;
+  bool interactive;
 
   Operands()
     : video()
     , framestop(std::numeric_limits<uintptr_t>::max())
     , keylogspeed(0.0)
+    , interactive(true)
   {}
 };
 
@@ -210,6 +212,12 @@ struct Params
         _ >> opcfg().keylogspeed;
         return true;
       }
+
+    for (Param _("interactive", "[Y/n]", "launch graphical interface (play, crop, keyog...)"); match(_);)
+      {
+	_ >> opcfg().interactive;
+	return true;
+      }
     
     for (Param _("elongation", "<ratio>", "Minimum mice body elongation considered for orientation"); match(_);)
       {
@@ -217,7 +225,7 @@ struct Params
         return true;
       }
 
-    for (Param _("soundsize", "[y/N]", "requires coherent tracked mice size (within 2x folds of median, else discarded)"); match(_);)
+    for (Param _("soundsize", "[y/N]", "Require coherent tracked mice size (within 2x folds of median, else discarded)"); match(_);)
       {
         _ >> ancfg().soundsize;
         return true;
@@ -351,67 +359,70 @@ main( int argc, char** argv )
   std::cerr << std::endl;
   
   analyser.trajectory();
-  
-  cv::namedWindow( "w", cv::WINDOW_AUTOSIZE );
-  
-  cv::setMouseCallback( "w", (cv::MouseCallback)mouse_callback, &analyser );
-  bool keylogger = operands.keylogspeed;
-  int kwait = 0;
-  cv::VideoWriter writer;
-  typedef std::map<double,char> KeyLog;
-  KeyLog keylog;
-    
-  for (VideoFrameIterator itr( operands.video, operands.framestop ); itr.next();)
+
+  if (operands.interactive)
     {
-      analyser.redraw( itr );
-      imshow( "w", itr.frame );
-      int k = cv::waitKey(kwait);
+      cv::namedWindow( "w", cv::WINDOW_AUTOSIZE );
+  
+      cv::setMouseCallback( "w", (cv::MouseCallback)mouse_callback, &analyser );
+      bool keylogger = operands.keylogspeed;
+      int kwait = 0;
+      cv::VideoWriter writer;
+      typedef std::map<double,char> KeyLog;
+      KeyLog keylog;
+    
+      for (VideoFrameIterator itr( operands.video, operands.framestop ); itr.next();)
+	{
+	  analyser.redraw( itr );
+	  imshow( "w", itr.frame );
+	  int k = cv::waitKey(kwait);
 
+	  if (writer.isOpened())
+	    writer << itr.frame;
+      
+	  if (k == -1)
+	    continue;
+      
+	  if (kwait)
+	    {
+	      // Play mode, log key if necessary
+	      if (keylogger)
+		keylog.insert(KeyLog::value_type(itr.sec(), k));
+	      continue;
+	    }
+
+	  switch (k)
+	    {
+	    case 'r':
+	      writer.open( (prefix + "_rec.avi").c_str(), CV_FOURCC('M','J','P','G'), 25, cv::Size( analyser.width(), analyser.height() ) );
+	      /* move on to set kwait */
+	    case '\n': case '\r':
+	      kwait = keylogger ? std::max<int>(1000./(itr.fps*operands.keylogspeed), 1) : 1;
+	      break;
+	    case '\b': 
+	      analyser.restart();
+	      break;
+	    default:
+	      std::cerr << "KeyCode: " << k << "\n";
+	      break;
+	    }
+	}
+  
       if (writer.isOpened())
-        writer << itr.frame;
-      
-      if (k == -1)
-        continue;
-      
-      if (kwait)
-        {
-          // Play mode, log key if necessary
-          if (keylogger)
-            keylog.insert(KeyLog::value_type(itr.sec(), k));
-          continue;
-        }
+	writer.release();
+  
+      cv::destroyWindow( "w" );
 
-      switch (k)
-        {
-        case 'r':
-          writer.open( (prefix + "_rec.avi").c_str(), CV_FOURCC('M','J','P','G'), 25, cv::Size( analyser.width(), analyser.height() ) );
-          /* move on to set kwait */
-        case '\n': case '\r':
-          kwait = keylogger ? std::max<int>(1000./(itr.fps*operands.keylogspeed), 1) : 1;
-          break;
-        case '\b': 
-          analyser.restart();
-          break;
-        default:
-          std::cerr << "KeyCode: " << k << "\n";
-          break;
-        }
+      if (keylog.size())
+	{
+	  std::ofstream sink( (prefix + "_keys.csv").c_str() );
+	  for (KeyLog::value_type const& key : keylog)
+	    sink << key.first << "," << key.second << "\n";
+	}
     }
-  
-  if (writer.isOpened())
-    writer.release();
-  
-  cv::destroyWindow( "w" );
   
   std::ofstream sink( (prefix + ".csv").c_str() );
   analyser.dumpresults( sink );
 
-  if (keylog.size())
-    {
-      std::ofstream sink( (prefix + "_keys.csv").c_str() );
-      for (KeyLog::value_type const& key : keylog)
-	sink << key.first << "," << key.second << "\n";
-    }
-  
   return 0;
 }

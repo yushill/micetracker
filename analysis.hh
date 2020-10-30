@@ -29,7 +29,7 @@ struct Mice
     : p(_p), d(_d), mjr(_mjr), mnr(_mnr), valid(not hasnan())
   {}
   
-  double distance() const { return sqrt( (ep1() - ep0()).sqnorm() ); }
+  double length() const { return sqrt( (ep1() - ep0()).sqnorm() ); }
   
   void invalidate() { p.x = p.y = d.x = d.y = mjr = mnr = nan(""); valid = false; }
   double hasnan() const { return std::isnan(p.x) or std::isnan(p.y) or std::isnan(d.x) or std::isnan(d.y) or std::isnan(mjr) or std::isnan(mnr); }

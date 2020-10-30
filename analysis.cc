@@ -243,14 +243,14 @@ Analyser::trajectory()
   // Computing median
   double median = 0;
   {
-    typedef std::set<double> distances_t;
-    distances_t distances;
+    typedef std::set<double> lengths_t;
+    lengths_t lengths;
     for (std::vector<Mice>::iterator itr = mices.begin(), end = mices.end(); itr != end; ++itr) {
       if (itr->hasnan() or (itr->elongation() <= minelongation)) { itr->invalidate(); continue; }
-      distances.insert( itr->distance() );
+      lengths.insert( itr->length() );
     }
-    std::set<double>::const_iterator mid = distances.begin();
-    for (intptr_t idx = distances.size()/2; --idx>=0;) ++mid;
+    std::set<double>::const_iterator mid = lengths.begin();
+    for (intptr_t idx = lengths.size()/2; --idx>=0;) ++mid;
     median = *mid;
   }
   std::cerr << "median: " << median << std::endl;
@@ -260,7 +260,7 @@ Analyser::trajectory()
       // Invalidating suspicious data
       for (std::vector<Mice>::iterator itr = mices.begin(), end = mices.end(); itr != end; ++itr) {
         if (itr->hasnan()) continue;
-        double d = itr->distance();
+        double d = itr->length();
         if ((d >= median*2) or (d <= median/2)) itr->invalidate();
       }
     }
@@ -278,18 +278,19 @@ Analyser::trajectory()
     if (idx >= micecount) throw 0;
     if (idx < (micecount-1)) { mices[micecount-1] = mices[idx]; }
       
-    for (std::vector<Mice>::iterator tail = mices.begin(), head = tail + 1, end = mices.end(); head != end; tail = head, ++head) {
-      if (not head->hasnan()) continue;
-      while (head->hasnan()) { if (++head == end) throw 0; }
-      uintptr_t dist = head-tail;
-      for (std::vector<Mice>::iterator hole = tail+1; hole != head; ++hole) {
-        uintptr_t idx = hole-tail;
-        double a = double(idx)/double(dist), b = 1-a;
-        hole->p = head->p*a + tail->p*b;
-        hole->d = Point<double>( 1, 0 );
-        hole->mjr = hole->mnr = median/2;
+    for (std::vector<Mice>::iterator tail = mices.begin(), head = tail + 1, end = mices.end(); head != end; tail = head, ++head)
+      {
+	if (not head->hasnan()) continue;
+	while (head->hasnan()) { if (++head == end) throw 0; }
+	uintptr_t dist = head-tail;
+	for (std::vector<Mice>::iterator hole = tail+1; hole != head; ++hole) {
+	  uintptr_t idx = hole-tail;
+	  double a = double(idx)/double(dist), b = 1-a;
+	  hole->p = head->p*a + tail->p*b;
+	  hole->d = Point<double>( 1, 0 );
+	  hole->mjr = hole->mnr = median/2;
+	}
       }
-    }
   }
   // flip correction
   { // lining up locally
@@ -337,7 +338,10 @@ Analyser::trajectory()
         uintptr_t idx = hole-tail;
         double a = double(idx)/double(dist), b = 1-a;
         hole->d = head->d*a + tail->d*b;
-        hole->d /= sqrt(hole->d.sqnorm());
+	if (double norm = hole->d.sqnorm())
+	  hole->d /= norm;
+	else
+	  hole->d = Point<double>( 1, 0 );
         hole->mjr = head->mjr*a + tail->mjr*b;
         hole->mnr = head->mnr*a + tail->mnr*b;
       }
