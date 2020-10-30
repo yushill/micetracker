@@ -338,8 +338,8 @@ Analyser::trajectory()
         uintptr_t idx = hole-tail;
         double a = double(idx)/double(dist), b = 1-a;
         hole->d = head->d*a + tail->d*b;
-	if (double norm = hole->d.sqnorm())
-	  hole->d /= norm;
+	if (double sqnorm = hole->d.sqnorm())
+	  hole->d /= sqrt(sqnorm);
 	else
 	  hole->d = Point<double>( 1, 0 );
         hole->mjr = head->mjr*a + tail->mjr*b;
