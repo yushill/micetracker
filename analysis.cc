@@ -35,7 +35,7 @@ Analyser::click( int x1, int y1 )
     croparg = oss.str(); 
   }
     
-  std::cerr << "==> " << croparg << std::endl;
+  std::cerr << "==> " << croparg << " (x=" << x0 << ":y=" << y0 << ":w=" << (x1-x0) << ":h=" << (y1-y0) << ")" << std::endl;
 }
   
 void
@@ -74,6 +74,9 @@ Analyser::Pass0::step(uintptr_t compcount)
 void
 Analyser::step( FrameIterator const& fi, Pass0& pass0 )
 {
+  if (not bgframes->accept( fi.idx ))
+    return;
+    
   /* First pass 'pass0' gathers maximum info collectible from first
    * pass: (1) movie dimensions (Y,X,L) (2) Summing background values
    * for background computation
@@ -89,9 +92,6 @@ Analyser::step( FrameIterator const& fi, Pass0& pass0 )
   
   if (bg.empty()) throw Ouch();
 
-  if (not bgframes->accept( fi.idx ))
-    return;
-    
   for (uintptr_t y = 0; y < height; ++y)
     {
       uint8_t const* row = img.ptr<uint8_t>(y);

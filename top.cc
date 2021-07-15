@@ -346,7 +346,7 @@ main( int argc, char** argv )
         itr.progress(std::cerr);
         analyser.step( itr, pass0 );
       }
-    std::cerr << std::endl;
+    std::cerr << "\n#frames: " << pass0.records << '\n';
     analyser.finish( pass0 );
   }
   
